@@ -4,7 +4,6 @@ import {
 } from './ssh-pty-legacy-projection'
 import { SshPtyModelAdmission } from './ssh-pty-model-admission'
 import { SshPtyOutputExitDeadline } from './ssh-pty-output-exit-deadline'
-import { settleSshPtyOutputExit } from './ssh-pty-output-exit'
 import { SshPtyOutputGenerationGuard } from './ssh-pty-output-generation-guard'
 import {
   SshPtyOutputModelMigration,
@@ -13,8 +12,10 @@ import {
 } from './ssh-pty-output-model-migration'
 import {
   SshPtyOutputSourceObligations,
-  type SshPtyOutputSourceReservation
+  type SshPtyOutputSourceReservation,
+  type SshPtyOwnershipTransferSourceRange
 } from './ssh-pty-output-source-obligations'
+import { SshPtyOwnershipTransferModelCheckpoints } from './ssh-pty-ownership-transfer-model-checkpoints'
 import type {
   SshPtyOutputDataEvent,
   SshPtyOutputExitEvent,
@@ -24,13 +25,7 @@ import type {
 } from './ssh-pty-output-intake-contract'
 import { outputIntakeError } from './ssh-pty-output-intake-validation'
 
-export type {
-  SshPtyOutputDataEvent,
-  SshPtyOutputExitEvent,
-  SshPtyOutputIntakeDependencies,
-  SshPtyOutputIntakeOptions,
-  SshPtyOutputReceipt
-} from './ssh-pty-output-intake-contract'
+export type * from './ssh-pty-output-intake-contract'
 
 export class SshPtyOutputIntake {
   private readonly projections: SshPtyLegacyProjectionLedger
@@ -39,13 +34,20 @@ export class SshPtyOutputIntake {
   private readonly admission: SshPtyModelAdmission
   private readonly modelMigration: SshPtyOutputModelMigration
   private readonly exitDeadline: SshPtyOutputExitDeadline
+  private readonly ownershipTransferModelCheckpoints: SshPtyOwnershipTransferModelCheckpoints
   private disposed = false
 
   constructor(
     private readonly dependencies: SshPtyOutputIntakeDependencies,
     options: SshPtyOutputIntakeOptions = {}
   ) {
-    this.sourceObligations = new SshPtyOutputSourceObligations(dependencies.publishSourceAck)
+    this.ownershipTransferModelCheckpoints = new SshPtyOwnershipTransferModelCheckpoints(
+      options.ownershipTransferOutputEnabled === true,
+      dependencies.checkpointOwnershipTransferModel
+    )
+    this.sourceObligations = new SshPtyOutputSourceObligations(dependencies.publishSourceAck, {
+      ownershipTransferOutputEnabled: this.ownershipTransferModelCheckpoints.enabled
+    })
     this.projections = new SshPtyLegacyProjectionLedger({
       onSettled: (span) => this.sourceObligations.settleDesktop(span, 'renderer-parse'),
       onTransferred: (span, reason) => this.sourceObligations.transferDesktop(span, reason)
@@ -83,6 +85,12 @@ export class SshPtyOutputIntake {
     }
     let projection: LegacySshProjectionSemantics | undefined
     let sourceReservation: SshPtyOutputSourceReservation | undefined
+    let ownershipTransferRange: SshPtyOwnershipTransferSourceRange | undefined
+    try {
+      ownershipTransferRange = this.ownershipTransferModelCheckpoints.rangeFor(event)
+    } catch (error) {
+      return Promise.reject(error)
+    }
     const key = { ptyId: event.id, providerGeneration: event.providerGeneration }
     const tracked: SshPtyTrackedModelAdmission = { key, started: false }
     const receipt = this.admission.accept(key, event.data, event.rawLength, () => {
@@ -119,6 +127,9 @@ export class SshPtyOutputIntake {
           )
         }
       } catch (error) {
+        if (ownershipTransferRange) {
+          this.ownershipTransferModelCheckpoints.fail(ownershipTransferRange, error)
+        }
         if (sourceReservation) {
           this.sourceObligations.rollback(sourceReservation)
         }
@@ -129,8 +140,20 @@ export class SshPtyOutputIntake {
       }
       let model: { sequence: number; completion: Promise<void> }
       try {
-        model = this.dependencies.acceptModel(event, projection)
+        const checkpointProjection = projection
+        if (!checkpointProjection) {
+          throw outputIntakeError('ssh_projection_receipt_missing')
+        }
+        model = this.ownershipTransferModelCheckpoints.accept(
+          ownershipTransferRange,
+          event,
+          checkpointProjection,
+          () => this.dependencies.acceptModel(event, checkpointProjection)
+        )
       } catch (error) {
+        if (ownershipTransferRange) {
+          this.ownershipTransferModelCheckpoints.fail(ownershipTransferRange, error)
+        }
         if (sourceReservation) {
           this.sourceObligations.rollback(sourceReservation)
         }
@@ -142,6 +165,11 @@ export class SshPtyOutputIntake {
       } catch {
         const id = projection.identity.projectionSemanticsId
         this.projections.transfer([id], 'projection-admission-failed')
+      }
+      if (sourceReservation) {
+        // Consume an early destination receipt only after model admission succeeds; a
+        // synchronous acceptModel failure must leave the receipt available for rollback/retry.
+        this.sourceObligations.settlePendingOwnershipTransfer(sourceReservation.span)
       }
       return model
     })
@@ -180,28 +208,10 @@ export class SshPtyOutputIntake {
   async acceptExit(event: SshPtyOutputExitEvent): Promise<void> {
     this.generationGuard.sealExit(event)
     await this.exitDeadline.wait(event, (validateNormalExit) =>
-      this.finishExit(event, validateNormalExit)
-    )
-  }
-
-  private async finishExit(
-    event: SshPtyOutputExitEvent,
-    validateNormalExit: () => void
-  ): Promise<void> {
-    await settleSshPtyOutputExit({
-      event,
-      admission: this.admission,
-      projections: this.projections,
-      dependencies: this.dependencies,
-      validateGeneration: () => {
+      this.exitDeadline.settle(event, validateNormalExit, () =>
         this.generationGuard.validate(event)
-        validateNormalExit()
-      },
-      prepareExit: () => this.exitDeadline.prepareExitOnce(event),
-      afterAdmissionIdle: () => this.sourceObligations.sealPty(event),
-      waitForSourceTerminal: () => this.sourceObligations.whenPtyTerminal(event),
-      beforeFinalize: () => this.sourceObligations.markExitPublished(event)
-    })
+      )
+    )
   }
 
   publishProjectionPrefix(
@@ -214,6 +224,20 @@ export class SshPtyOutputIntake {
 
   settleProjectionPrefix(ptyId: string, accountingChars: number): number {
     return this.projections.settlePublishedPrefix(ptyId, accountingChars)
+  }
+
+  settleOwnershipTransferOutput(range: SshPtyOwnershipTransferSourceRange): void {
+    this.sourceObligations.settleOwnershipTransfer(range)
+  }
+
+  waitForOwnershipTransferModelCheckpoints(
+    ranges: readonly SshPtyOwnershipTransferSourceRange[]
+  ): Promise<void> {
+    try {
+      return this.ownershipTransferModelCheckpoints.waitFor(ranges)
+    } catch (error) {
+      return Promise.reject(error)
+    }
   }
 
   transferProjections(ids: readonly string[], reason: string): number {
@@ -240,6 +264,7 @@ export class SshPtyOutputIntake {
     this.dependencies.onGenerationClosed?.(providerGeneration, reason)
     this.projections.closeGeneration(providerGeneration, reason)
     this.sourceObligations.closeGeneration(providerGeneration, reason)
+    this.ownershipTransferModelCheckpoints.closeGeneration(providerGeneration, reason)
     this.exitDeadline.closeGeneration(providerGeneration, outputIntakeError(reason))
   }
 
@@ -253,6 +278,7 @@ export class SshPtyOutputIntake {
     }
     this.admission.dispose()
     this.sourceObligations.dispose()
+    this.ownershipTransferModelCheckpoints.dispose()
   }
 
   getRemoteSourceRangeConsumerHooks() {
@@ -289,6 +315,7 @@ export class SshPtyOutputIntake {
       model: this.admission.getDebugSnapshot(),
       projection: this.projections.getDebugSnapshot(),
       source: this.sourceObligations.getDebugSnapshot(),
+      ownershipTransferModelCheckpoints: this.ownershipTransferModelCheckpoints.size,
       generation: this.generationGuard.getDebugSnapshot(),
       exitBarriers: this.exitDeadline.activeBarriers
     }
