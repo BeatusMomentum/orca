@@ -19,6 +19,7 @@ type CheckpointAttempt = {
 type CheckpointRecord = {
   range: SshPtyOwnershipTransferSourceRange
   attempt: CheckpointAttempt
+  releaseWhenFulfilled: boolean
 }
 
 /** Rendezvous between complete destination frames and normal SSH model admission. */
@@ -77,6 +78,9 @@ export class SshPtyOwnershipTransferModelCheckpoints {
         }
         attempt.status = 'fulfilled'
         attempt.resolve()
+        if (record.releaseWhenFulfilled) {
+          this.records.delete(checkpointKey(record.range))
+        }
       },
       (error) => {
         if (record.attempt !== attempt || attempt.status !== 'pending') {
@@ -95,6 +99,20 @@ export class SshPtyOwnershipTransferModelCheckpoints {
     }
     record.attempt.status = 'failed'
     record.attempt.reject(asError(error))
+  }
+
+  release(range: SshPtyOwnershipTransferSourceRange): void {
+    const key = checkpointKey(range)
+    const record = this.records.get(key)
+    if (!record) {
+      return
+    }
+    requireSameRange(record.range, range)
+    if (record.attempt.status === 'fulfilled') {
+      this.records.delete(key)
+      return
+    }
+    record.releaseWhenFulfilled = true
   }
 
   waitFor(ranges: readonly SshPtyOwnershipTransferSourceRange[]): Promise<void> {
@@ -164,7 +182,11 @@ export class SshPtyOwnershipTransferModelCheckpoints {
     if (this.records.size >= MAX_SSH_PTY_OWNERSHIP_TRANSFER_MODEL_CHECKPOINTS) {
       throw outputIntakeError('ssh_ownership_transfer_model_checkpoint_capacity')
     }
-    const record = { range: Object.freeze({ ...range }), attempt: createAttempt() }
+    const record = {
+      range: Object.freeze({ ...range }),
+      attempt: createAttempt(),
+      releaseWhenFulfilled: false
+    }
     this.records.set(key, record)
     return record
   }

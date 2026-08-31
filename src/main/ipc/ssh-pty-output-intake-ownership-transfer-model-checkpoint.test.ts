@@ -79,6 +79,9 @@ describe('SshPtyOutputIntake ownership-transfer model checkpoints', () => {
     durable.resolve()
     await expect(admission).resolves.toMatchObject({ sequence: 4 })
     await expect(frameReady).resolves.toBeUndefined()
+    expect(harness.intake.getDebugSnapshot().ownershipTransferModelCheckpoints).toBe(1)
+    harness.intake.settleOwnershipTransferOutput(range())
+    expect(harness.intake.getDebugSnapshot().ownershipTransferModelCheckpoints).toBe(0)
   })
 
   it('joins fragments observed before and after the complete-frame rendezvous', async () => {

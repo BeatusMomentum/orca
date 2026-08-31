@@ -16,6 +16,7 @@ import {
   type SshPtyOwnershipTransferSourceRange
 } from './ssh-pty-output-source-obligations'
 import { SshPtyOwnershipTransferModelCheckpoints } from './ssh-pty-ownership-transfer-model-checkpoints'
+import { sshPtyOutputIntakeDebugSnapshot } from './ssh-pty-output-intake-debug'
 import type {
   SshPtyOutputDataEvent,
   SshPtyOutputExitEvent,
@@ -85,12 +86,7 @@ export class SshPtyOutputIntake {
     }
     let projection: LegacySshProjectionSemantics | undefined
     let sourceReservation: SshPtyOutputSourceReservation | undefined
-    let ownershipTransferRange: SshPtyOwnershipTransferSourceRange | undefined
-    try {
-      ownershipTransferRange = this.ownershipTransferModelCheckpoints.rangeFor(event)
-    } catch (error) {
-      return Promise.reject(error)
-    }
+    const ownershipTransferRange = this.ownershipTransferModelCheckpoints.rangeFor(event)
     const key = { ptyId: event.id, providerGeneration: event.providerGeneration }
     const tracked: SshPtyTrackedModelAdmission = { key, started: false }
     const receipt = this.admission.accept(key, event.data, event.rawLength, () => {
@@ -228,6 +224,7 @@ export class SshPtyOutputIntake {
 
   settleOwnershipTransferOutput(range: SshPtyOwnershipTransferSourceRange): void {
     this.sourceObligations.settleOwnershipTransfer(range)
+    this.ownershipTransferModelCheckpoints.release(range)
   }
 
   waitForOwnershipTransferModelCheckpoints(
@@ -295,7 +292,6 @@ export class SshPtyOutputIntake {
   ): SshPtyOutputGenerationMigration {
     return this.modelMigration.beginGeneration(providerGeneration, timeoutMs)
   }
-
   applySourceCancellationProof(
     event: SshPtyOutputExitEvent,
     proof: Readonly<{ sentEndSu: number; creditedEndSu: number }>
@@ -311,13 +307,13 @@ export class SshPtyOutputIntake {
   }
 
   getDebugSnapshot() {
-    return {
-      model: this.admission.getDebugSnapshot(),
-      projection: this.projections.getDebugSnapshot(),
-      source: this.sourceObligations.getDebugSnapshot(),
-      ownershipTransferModelCheckpoints: this.ownershipTransferModelCheckpoints.size,
-      generation: this.generationGuard.getDebugSnapshot(),
-      exitBarriers: this.exitDeadline.activeBarriers
-    }
+    return sshPtyOutputIntakeDebugSnapshot({
+      admission: this.admission,
+      projections: this.projections,
+      sourceObligations: this.sourceObligations,
+      generationGuard: this.generationGuard,
+      exitDeadline: this.exitDeadline,
+      ownershipTransferModelCheckpoints: this.ownershipTransferModelCheckpoints.size
+    })
   }
 }
