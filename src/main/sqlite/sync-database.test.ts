@@ -37,7 +37,10 @@ afterEach(async () => {
 })
 
 describe('SyncDatabase Bun compatibility', () => {
-  it('adapts bun:sqlite constructor options and busy timeout', () => {
+  it.each([false, true])('adapts bun:sqlite with a Node compatibility shim present: %s', (shim) => {
+    if (shim) {
+      vi.spyOn(process, 'versions', 'get').mockReturnValue({ ...process.versions, bun: '1.4.0' })
+    }
     const statement = {}
     const bunDatabase = {
       close: vi.fn(),
@@ -65,7 +68,7 @@ describe('SyncDatabase Bun compatibility', () => {
     }
     const builtinModule = vi
       .spyOn(process, 'getBuiltinModule')
-      .mockReturnValueOnce(undefined as never)
+      .mockReturnValueOnce((shim ? { DatabaseSync: vi.fn() } : undefined) as never)
       .mockReturnValueOnce({ Database: BunDatabase } as never)
 
     const db = new SyncDatabase(':memory:', { readonly: true, timeout: 250 })

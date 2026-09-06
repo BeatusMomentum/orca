@@ -36,7 +36,8 @@ function loadDatabaseSync(): typeof DatabaseSync {
   const nodeSqlite = process.getBuiltinModule('node:sqlite') as
     | { DatabaseSync?: typeof DatabaseSync }
     | undefined
-  if (typeof nodeSqlite?.DatabaseSync === 'function') {
+  // Bun's Node compatibility driver does not provide the strict native close contract.
+  if (!process.versions.bun && typeof nodeSqlite?.DatabaseSync === 'function') {
     return nodeSqlite.DatabaseSync
   }
 
