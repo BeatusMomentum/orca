@@ -5,6 +5,38 @@ import { buildWindowsCmdCommand } from '../../../shared/child-process/windows-co
 import { createWindowsBunPtyLaunch } from './windows-bun-pty-launch'
 
 describe('Windows Bun PTY gated launch', () => {
+  it.each(['/K', '/k', '/C', '/c'])(
+    'leaves the nested cmd %s switch unquoted while retaining command escaping',
+    (commandSwitch) => {
+      const file = 'C:\\Windows\\System32\\CMD.EXE'
+      const command = 'chcp 65001 > nul & echo 状態%VALUE%!'
+      const launch = createWindowsBunPtyLaunch({ file, args: [commandSwitch, command], env: {} })
+      try {
+        expect(launch.env.ORCA_BUN_PTY_CHILD_COMMAND).toBe(
+          `${buildWindowsCmdCommand(file, [])} ${commandSwitch} ${buildWindowsCmdCommand(command, [])}`
+        )
+        expect(existsSync(launch.env.ORCA_BUN_PTY_JOB_GATE)).toBe(false)
+      } finally {
+        launch.dispose()
+      }
+    }
+  )
+
+  it('does not interpret command switches in non-cmd argv or after the cmd command switch', () => {
+    for (const file of ['C:\\Tools\\shell.exe', 'C:\\Windows\\System32\\cmd.exe']) {
+      const launch = createWindowsBunPtyLaunch({ file, args: ['/K', '/C'], env: {} })
+      try {
+        expect(launch.env.ORCA_BUN_PTY_CHILD_COMMAND).toBe(
+          file.endsWith('cmd.exe')
+            ? `${buildWindowsCmdCommand(file, [])} /K "/C"`
+            : buildWindowsCmdCommand(file, ['/K', '/C'])
+        )
+      } finally {
+        launch.dispose()
+      }
+    }
+  })
+
   it('keeps hostile Unicode argv in the UTF-16 environment and gates the ASCII batch', () => {
     const file = 'C:\\状 態\\%tool%&shell.exe'
     const args = ['a b', 'c"d', 'e%F%g', 'h&i', 'j^k', 'bang!']

@@ -1,9 +1,10 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import {
   buildWindowsCmdCommand,
-  buildWindowsCmdShimCommandLine
+  buildWindowsCmdShimCommandLine,
+  quoteWindowsCmdArgument
 } from '../../../shared/child-process/windows-command-line'
 import { getCmdExePath } from '../../../shared/windows-batch-spawn'
 
@@ -12,6 +13,22 @@ const COMMAND_ENV = 'ORCA_BUN_PTY_CHILD_COMMAND'
 const CLEAR_SEQUENCE = '\x1b[3J\x1b[2J\x1b[H'
 const CLEANUP_MAX_RETRIES = 5
 const CLEANUP_RETRY_DELAY_MS = 50
+
+function buildChildCommand(file: string, args: string[]): string {
+  const command = buildWindowsCmdCommand(file, args)
+  if (win32.basename(file).toLowerCase() !== 'cmd.exe') {
+    return command
+  }
+  const commandSwitch = args.findIndex((arg) => /^\/[ck]$/i.test(arg))
+  if (commandSwitch === -1) {
+    return command
+  }
+  // cmd parses /K and /C itself; quoting the switch corrupts its startup command.
+  return [
+    quoteWindowsCmdArgument(file),
+    ...args.map((arg, index) => (index === commandSwitch ? arg : quoteWindowsCmdArgument(arg)))
+  ].join(' ')
+}
 
 function removeLaunchDirectory(directory: string): void {
   try {
@@ -40,7 +57,7 @@ export function createWindowsBunPtyLaunch(args: {
   args: string[]
   env: Record<string, string>
 }): WindowsBunPtyLaunch {
-  const childCommand = buildWindowsCmdCommand(args.file, args.args)
+  const childCommand = buildChildCommand(args.file, args.args)
   const directory = mkdtempSync(join(tmpdir(), 'orca-bun-pty-'))
   const gatePath = join(directory, 'job-assigned')
   const launchPath = join(directory, 'launch.cmd')
