@@ -4,6 +4,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { writeOrcadTemplateTestFixture } from './orcad-template-test-fixture.mjs'
 
 const require = createRequire(import.meta.url)
 const projectRoot = resolve(import.meta.dirname, '..', '..')
@@ -35,6 +36,135 @@ describe('packaged runtime resources', () => {
       ])
       const asar = {
         listPackage: () => [...sources.keys()].map((entry) => `\\${entry}`),
+        extractFile: (_asarPath, internalPath) => Buffer.from(sources.get(internalPath), 'utf8')
+      }
+
+      expect(() => verifyPackagedMainRuntimeDeps(resourcesDir, asar)).not.toThrow()
+    } finally {
+      await rm(resourcesDir, { recursive: true, force: true })
+    }
+  })
+
+  it('verifies literal dynamic imports from the packaged main bundle', async () => {
+    const resourcesDir = await mkdtemp(join(tmpdir(), 'orca-runtime-dynamic-imports-'))
+    try {
+      await writeFile(join(resourcesDir, 'app.asar'), '', 'utf8')
+
+      // The first is the exact shape oxc emits for the memoized SDK import in a
+      // shipped build; the second is the spaced variant the pattern also accepts.
+      const sources = new Map([
+        [
+          'out/main/index.js',
+          'let p=null;function q(){return p??=import(`@anthropic-ai/claude-agent-sdk`),p}'
+        ],
+        [
+          'out/main/agent-hooks/managed-agent-hook-controls.js',
+          'import (`@anthropic-ai/claude-agent-sdk`)'
+        ]
+      ])
+      const asar = {
+        listPackage: () => [...sources.keys()].map((entry) => `/${entry}`),
+        extractFile: (_asarPath, internalPath) => Buffer.from(sources.get(internalPath), 'utf8')
+      }
+
+      expect(() => verifyPackagedMainRuntimeDeps(resourcesDir, asar)).toThrow(
+        /@anthropic-ai\/claude-agent-sdk/
+      )
+
+      await mkdir(join(resourcesDir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk'), {
+        recursive: true
+      })
+      expect(() => verifyPackagedMainRuntimeDeps(resourcesDir, asar)).not.toThrow()
+    } finally {
+      await rm(resourcesDir, { recursive: true, force: true })
+    }
+  })
+
+  it('still fails when a required packaged main entry is missing entirely', async () => {
+    const resourcesDir = await mkdtemp(join(tmpdir(), 'orca-runtime-missing-entry-'))
+    try {
+      await writeFile(join(resourcesDir, 'app.asar'), '', 'utf8')
+
+      const asar = {
+        listPackage: () => ['/out/main/index.js'],
+        extractFile: () => Buffer.from('', 'utf8')
+      }
+
+      expect(() => verifyPackagedMainRuntimeDeps(resourcesDir, asar)).toThrow(
+        /managed-agent-hook-controls\.js was not found/
+      )
+    } finally {
+      await rm(resourcesDir, { recursive: true, force: true })
+    }
+  })
+
+  it('verifies bare imports that rolldown hoisted into a shared main chunk', async () => {
+    const resourcesDir = await mkdtemp(join(tmpdir(), 'orca-runtime-chunk-imports-'))
+    try {
+      await writeFile(join(resourcesDir, 'app.asar'), '', 'utf8')
+
+      // The entry points themselves carry no specifier; only the shared chunk does.
+      const sources = new Map([
+        ['out/main/index.js', ''],
+        ['out/main/agent-hooks/managed-agent-hook-controls.js', ''],
+        ['out/main/chunks/managed-agent-hook-controls-CWf8D-KR.js', 'require(`jsonc-parser`)']
+      ])
+      // Real listPackage emits directory nodes too, and extractFile throws on them,
+      // so the `.js` anchor is load-bearing -- keep the mock able to catch that.
+      const directories = ['/out', '/out/main', '/out/main/chunks']
+      const asar = {
+        listPackage: () => [...directories, ...[...sources.keys()].map((entry) => `/${entry}`)],
+        extractFile: (_asarPath, internalPath) => {
+          const source = sources.get(internalPath)
+          if (source === undefined) {
+            throw new Error(`Expected to find file at: ${internalPath} but found a directory`)
+          }
+          return Buffer.from(source, 'utf8')
+        }
+      }
+
+      expect(() => verifyPackagedMainRuntimeDeps(resourcesDir, asar)).toThrow(/jsonc-parser/)
+
+      await mkdir(join(resourcesDir, 'node_modules', 'jsonc-parser'), { recursive: true })
+      expect(() => verifyPackagedMainRuntimeDeps(resourcesDir, asar)).not.toThrow()
+    } finally {
+      await rm(resourcesDir, { recursive: true, force: true })
+    }
+  })
+
+  it('reads a spread require, whose leading dots are not member access', async () => {
+    const resourcesDir = await mkdtemp(join(tmpdir(), 'orca-runtime-spread-require-'))
+    try {
+      await writeFile(join(resourcesDir, 'app.asar'), '', 'utf8')
+
+      const sources = new Map([
+        ['out/main/index.js', 'const all=[...require("jsonc-parser")]'],
+        ['out/main/agent-hooks/managed-agent-hook-controls.js', '']
+      ])
+      const asar = {
+        listPackage: () => [...sources.keys()].map((entry) => `/${entry}`),
+        extractFile: (_asarPath, internalPath) => Buffer.from(sources.get(internalPath), 'utf8')
+      }
+
+      expect(() => verifyPackagedMainRuntimeDeps(resourcesDir, asar)).toThrow(/jsonc-parser/)
+    } finally {
+      await rm(resourcesDir, { recursive: true, force: true })
+    }
+  })
+
+  it('ignores member calls onto Orca methods that are themselves named require', async () => {
+    const resourcesDir = await mkdtemp(join(tmpdir(), 'orca-runtime-member-require-'))
+    try {
+      await writeFile(join(resourcesDir, 'app.asar'), '', 'utf8')
+
+      // electron-sidecar-tab-registry and browser-execution-host-grant-registry both
+      // expose require(key); a literal key must never read as a packaged specifier.
+      const sources = new Map([
+        ['out/main/index.js', 'registry.require("public-a");grants.require(`host-key`)'],
+        ['out/main/agent-hooks/managed-agent-hook-controls.js', 'state.import("android-sdk")']
+      ])
+      const asar = {
+        listPackage: () => [...sources.keys()].map((entry) => `/${entry}`),
         extractFile: (_asarPath, internalPath) => Buffer.from(sources.get(internalPath), 'utf8')
       }
 
@@ -132,6 +262,15 @@ describe('packaged runtime resources', () => {
       )
     ).toBe(true)
     expect(packagedTargets).toContain(join('node_modules', 'proper-lockfile'))
+  })
+
+  it('includes the Claude agent SDK in every desktop package plan', () => {
+    for (const platform of ['darwin', 'linux', 'win32']) {
+      const packagedTargets = createPackagedRuntimeNodeModuleResources(platform).map(
+        (resource) => resource.to
+      )
+      expect(packagedTargets).toContain(join('node_modules', '@anthropic-ai', 'claude-agent-sdk'))
+    }
   })
 
   it('prunes non-target @parcel/watcher architecture subpackages', async () => {
@@ -291,6 +430,7 @@ describe('packaged runtime resources', () => {
           'utf8'
         )
         await writeFile(launcherPath, '#!/usr/bin/env bash\n', { encoding: 'utf8', mode: 0o644 })
+        await writeOrcadTemplateTestFixture(resourcesDir)
 
         await electronBuilderConfig.afterPack({
           appOutDir: join(root, 'linux-unpacked'),
@@ -329,7 +469,8 @@ function collectLazyRequireSpecifiers(directory, found = new Map()) {
       continue
     }
     for (const match of source.matchAll(/\brequire[A-Za-z0-9_]*\(\s*'([^']+)'\s*\)/g)) {
-      if (isPackagedExternalSpecifier(match[1])) {
+      // This source scan includes Bun-only workers; bun:ffi is supplied by their runtime.
+      if (match[1] !== 'bun:ffi' && isPackagedExternalSpecifier(match[1])) {
         found.set(match[1], relative(projectRoot, entryPath).replaceAll('\\', '/'))
       }
     }
