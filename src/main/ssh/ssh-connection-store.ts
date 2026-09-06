@@ -255,6 +255,7 @@ export class SshConnectionStore {
       | 'getFolderWorkspaces'
       | 'getProjectGroups'
       | 'getRepos'
+      | 'getSshTargets'
       | 'inspectOrcadMigrationSourceDependencies'
       | 'listOrcadMigrationSourceCutovers'
     > {
@@ -266,7 +267,7 @@ export class SshConnectionStore {
     if (!target || getManagedOrcadOwnerEnvironmentId(target.owner) !== environmentId) {
       return null
     }
-    return this.store.updateSshTarget(targetId, { owner: undefined })
+    return this.store.updateSshTarget(targetId, { owner: undefined, orcadProvisioning: undefined })
   }
 
   updateTarget(id: string, updates: Partial<Omit<SshTarget, 'id'>>): SshTarget | null {
@@ -447,7 +448,7 @@ export function getRuntimeOwnedSshTargetId(runtimeId: string): string {
 }
 
 export function isRuntimeOwnedSshTarget(target: SshTarget): boolean {
-  return target.owner !== undefined
+  return target.owner !== undefined || target.orcadProvisioning !== undefined
 }
 
 function isLegacyConfigImportTarget(target: SshTarget): boolean {

@@ -3,6 +3,13 @@ import type {
   OrcadManagedRuntimeStatus
 } from '../../../../shared/orcad-managed-runtime'
 import type { OrcadMigrationPreflight } from '../../../../shared/orcad-migration-preflight'
+import type { OrcadSshPendingProvisioning } from '../../../../shared/orcad-ssh-provisioning'
+
+export type ManagedOrcadPendingSetup = OrcadManagedPendingMigration | OrcadSshPendingProvisioning
+
+export function managedOrcadPendingSetupId(setup: ManagedOrcadPendingSetup): string {
+  return 'requestId' in setup ? `provisioning:${setup.requestId}` : setup.environmentId
+}
 
 export type ManagedOrcadStatusEntry =
   | { state: 'ready'; status: OrcadManagedRuntimeStatus }

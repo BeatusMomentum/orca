@@ -35,8 +35,17 @@ function takeRepoReadoptions(): SshRepoReadoption[] {
   return repoReadoptions
 }
 
-function omitRendererSshTargetGeneration<T extends object>(value: T): Omit<T, 'generation'> {
-  const { generation: _generation, ...rest } = value as T & { generation?: unknown }
+function omitRendererSshTargetGeneration<T extends object>(
+  value: T
+): Omit<T, 'generation' | 'orcadProvisioning'> {
+  const {
+    generation: _generation,
+    orcadProvisioning: _intent,
+    ...rest
+  } = value as T & {
+    generation?: unknown
+    orcadProvisioning?: unknown
+  }
   return rest
 }
 

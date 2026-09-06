@@ -5,6 +5,7 @@ import { ManagedOrcadDeploymentForm } from './ManagedOrcadDeploymentForm'
 import { ManagedOrcadPendingMigrationRow } from './ManagedOrcadPendingMigrationRow'
 import { ManagedOrcadServerDialogs } from './ManagedOrcadServerDialogs'
 import { ManagedOrcadServerRow } from './ManagedOrcadServerRow'
+import { managedOrcadPendingSetupId } from './managed-orcad-server-types'
 import {
   type ManagedOrcadForceOperation,
   useManagedOrcadServers
@@ -111,9 +112,7 @@ export function ManagedOrcadServersSection({
 
       {state.loadError ? <p className="text-xs text-destructive">{state.loadError}</p> : null}
       <div className="rounded-lg border border-border/50 bg-card/30">
-        {state.loading &&
-        state.environments.length === 0 &&
-        state.pendingMigrations.length === 0 ? (
+        {state.loading && state.environments.length === 0 && state.pendingSetups.length === 0 ? (
           <div className="flex items-center gap-2 px-3 py-4 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
             {translate(
@@ -121,7 +120,10 @@ export function ManagedOrcadServersSection({
               'Checking managed servers…'
             )}
           </div>
-        ) : state.environments.length === 0 && state.pendingMigrations.length === 0 ? (
+        ) : state.loadError &&
+          state.environments.length === 0 &&
+          state.pendingSetups.length === 0 ? null : state.environments.length === 0 &&
+          state.pendingSetups.length === 0 ? (
           <div className="px-3 py-4 text-sm text-muted-foreground">
             {translate(
               'auto.components.settings.ManagedOrcadServersSection.empty',
@@ -130,13 +132,17 @@ export function ManagedOrcadServersSection({
           </div>
         ) : (
           <div className="divide-y divide-border/50">
-            {state.pendingMigrations.map((migration) => (
+            {state.pendingSetups.map((migration) => (
               <ManagedOrcadPendingMigrationRow
-                key={migration.environmentId}
+                key={managedOrcadPendingSetupId(migration)}
                 migration={migration}
                 busyAction={state.busyAction}
-                error={state.rowErrors[migration.environmentId]}
-                onResume={() => void state.resumeMigration(migration)}
+                error={state.rowErrors[managedOrcadPendingSetupId(migration)]}
+                onResume={() =>
+                  void ('requestId' in migration
+                    ? state.resumeProvisioning(migration)
+                    : state.resumeMigration(migration))
+                }
               />
             ))}
             {state.environments.map((environment) => (

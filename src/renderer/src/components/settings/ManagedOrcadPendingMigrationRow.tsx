@@ -4,11 +4,15 @@ import { translate } from '@/i18n/i18n'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import type { ManagedOrcadBusyAction } from './use-managed-orcad-servers'
+import {
+  managedOrcadPendingSetupId,
+  type ManagedOrcadPendingSetup
+} from './managed-orcad-server-types'
 
 type ManagedOrcadPendingMigrationRowProps = {
   busyAction: ManagedOrcadBusyAction | null
   error?: string
-  migration: OrcadManagedPendingMigration
+  migration: ManagedOrcadPendingSetup
   onResume: () => void
 }
 
@@ -18,7 +22,7 @@ export function ManagedOrcadPendingMigrationRow({
   migration,
   onResume
 }: ManagedOrcadPendingMigrationRowProps): React.JSX.Element {
-  const actionBusy = busyAction?.id === migration.environmentId
+  const actionBusy = busyAction?.id === managedOrcadPendingSetupId(migration)
   return (
     <div className="flex items-start gap-3 px-4 py-3">
       <ServerCog className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
@@ -32,9 +36,16 @@ export function ManagedOrcadPendingMigrationRow({
             )}
           </Badge>
         </div>
-        <p className="text-xs text-muted-foreground">{migration.sshTargetLabel}</p>
+        {'sshTargetLabel' in migration ? (
+          <p className="text-xs text-muted-foreground">{migration.sshTargetLabel}</p>
+        ) : null}
         <p className="text-xs text-destructive">
-          {managedOrcadMigrationDescription(migration.phase)}
+          {'phase' in migration
+            ? managedOrcadMigrationDescription(migration.phase)
+            : translate(
+                'auto.components.settings.ManagedOrcadServersSection.provisioningPending',
+                'Setup has not completed. The SSH host remains reserved; resume setup to retry.'
+              )}
         </p>
         {error ? <p className="text-xs text-destructive">{error}</p> : null}
       </div>

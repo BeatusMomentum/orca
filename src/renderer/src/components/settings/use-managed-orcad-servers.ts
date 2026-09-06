@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
-import type { OrcadManagedDeployResult } from '../../../../shared/orcad-managed-runtime'
+import type { OrcadSshPendingProvisioning } from '../../../../shared/orcad-ssh-provisioning'
 import { translate } from '@/i18n/i18n'
 import { useManagedOrcadCatalog } from './use-managed-orcad-catalog'
+import { deploySuccessMessage } from './managed-orcad-deploy-success'
+import { resumeManagedOrcadProvisioning } from './managed-orcad-provisioning-resume'
 import type {
   ManagedOrcadBusyAction,
   ManagedOrcadConfirmation,
@@ -23,6 +25,7 @@ export function useManagedOrcadServers(onEnvironmentsChanged: () => Promise<void
     environments,
     targets,
     pendingMigrations,
+    pendingSetups,
     statuses,
     loading,
     loadError,
@@ -265,6 +268,14 @@ export function useManagedOrcadServers(onEnvironmentsChanged: () => Promise<void
     loading,
     name,
     pendingMigrations,
+    pendingSetups,
+    resumeProvisioning: (request: OrcadSshPendingProvisioning) =>
+      resumeManagedOrcadProvisioning(request, {
+        setBusyAction,
+        clearRowError,
+        setRowError,
+        refreshAfterMutation
+      }),
     recover,
     resumeMigration,
     rollback,
@@ -282,20 +293,6 @@ export function useManagedOrcadServers(onEnvironmentsChanged: () => Promise<void
     targetPreflight,
     update
   }
-}
-
-function deploySuccessMessage(result: Exclude<OrcadManagedDeployResult, { outcome: 'deferred' }>) {
-  return result.outcome === 'already-current'
-    ? translate(
-        'auto.components.settings.ManagedOrcadServersSection.alreadyCurrent',
-        'orcad {{value0}} is already current.',
-        { value0: result.activeVersion }
-      )
-    : translate(
-        'auto.components.settings.ManagedOrcadServersSection.deployComplete',
-        'Activated orcad {{value0}}.',
-        { value0: result.activeVersion }
-      )
 }
 
 function errorMessage(error: unknown): string {

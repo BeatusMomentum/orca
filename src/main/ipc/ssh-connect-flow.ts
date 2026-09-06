@@ -103,7 +103,7 @@ async function doConnect(
   if (!target) {
     throw new Error(`SSH target "${targetId}" not found`)
   }
-  if (getManagedOrcadOwnerEnvironmentId(target.owner) !== null) {
+  if (target.orcadProvisioning || getManagedOrcadOwnerEnvironmentId(target.owner) !== null) {
     throw new Error('This SSH target is reserved for its managed Orca server.')
   }
 

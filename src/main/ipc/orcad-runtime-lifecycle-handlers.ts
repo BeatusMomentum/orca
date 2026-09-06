@@ -21,12 +21,14 @@ import {
   updateManagedOrcadEnvironment
 } from '../ssh/orcad-runtime-lifecycle'
 import { forgetRuntimeEnvironmentConnectivityState } from './runtime-environment-connectivity-handlers'
+import { registerOrcadSshProvisioningHandlers } from './orcad-ssh-provisioning-handlers'
 
 export function registerOrcadRuntimeLifecycleHandlers(options: {
   getUserDataPath: () => string
   getActiveEnvironmentId: () => string | null | undefined
   invalidateTransport: (environmentId: string) => Promise<void> | void
 }): void {
+  registerOrcadSshProvisioningHandlers(options.getUserDataPath)
   ipcMain.handle(
     'runtimeEnvironments:listPendingOrcadMigrations',
     (): OrcadManagedPendingMigration[] =>

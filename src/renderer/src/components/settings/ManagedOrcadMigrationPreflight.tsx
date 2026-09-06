@@ -168,7 +168,14 @@ function ManagedOrcadMigrationBlockerItems({
               key={`${forward.localPort}:${forward.remoteHost}:${forward.remotePort}`}
               className="block break-all font-mono text-[11px] text-muted-foreground"
             >
-              localhost:{forward.localPort} → {forward.remoteHost}:{forward.remotePort}
+              {translate(
+                'auto.orcadMigration.portForwardAddress',
+                '{{localAddress}} → {{remoteAddress}}',
+                {
+                  localAddress: `localhost:${forward.localPort}`,
+                  remoteAddress: `${forward.remoteHost}:${forward.remotePort}`
+                }
+              )}
             </span>
           ))}
         </li>

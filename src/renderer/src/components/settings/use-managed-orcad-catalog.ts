@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { OrcadManagedPendingMigration } from '../../../../shared/orcad-managed-runtime'
+import type { OrcadSshPendingProvisioning } from '../../../../shared/orcad-ssh-provisioning'
 import {
   isManagedOrcadRuntimeEnvironment,
   type PublicKnownRuntimeEnvironment
@@ -14,6 +15,7 @@ export function useManagedOrcadCatalog() {
   const [environments, setEnvironments] = useState<PublicKnownRuntimeEnvironment[]>([])
   const [targets, setTargets] = useState<SshTarget[]>([])
   const [pendingMigrations, setPendingMigrations] = useState<OrcadManagedPendingMigration[]>([])
+  const [pendingProvisioning, setPendingProvisioning] = useState<OrcadSshPendingProvisioning[]>([])
   const [statuses, setStatuses] = useState<Record<string, ManagedOrcadStatusEntry>>({})
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -29,11 +31,13 @@ export function useManagedOrcadCatalog() {
     setLoading(true)
     setLoadError(null)
     try {
-      const [listedEnvironments, listedTargets, listedPendingMigrations] = await Promise.all([
-        window.api.runtimeEnvironments.list(),
-        window.api.ssh.listTargets(),
-        window.api.runtimeEnvironments.listPendingOrcadMigrations()
-      ])
+      const [listedEnvironments, listedTargets, listedPendingMigrations, listedProvisioning] =
+        await Promise.all([
+          window.api.runtimeEnvironments.list(),
+          window.api.ssh.listTargets(),
+          window.api.runtimeEnvironments.listPendingOrcadMigrations(),
+          window.api.runtimeEnvironments.listPendingOrcadSshProvisioning()
+        ])
       const managed = listedEnvironments.filter(isManagedOrcadRuntimeEnvironment)
       const resolvedStatuses = await Promise.all(
         managed.map(async (environment) => {
@@ -61,6 +65,7 @@ export function useManagedOrcadCatalog() {
       setEnvironments(managed)
       setTargets(listedTargets)
       setPendingMigrations(listedPendingMigrations)
+      setPendingProvisioning(listedProvisioning)
       setStatuses(Object.fromEntries(resolvedStatuses))
     } catch (error) {
       if (loadRequestRef.current === requestId) {
@@ -103,10 +108,20 @@ export function useManagedOrcadCatalog() {
       })
   }
 
+  const registeredTargets = new Set(
+    environments.map((environment) => environment.orcadDeployment?.sshTargetId)
+  )
+  const provisioningTargets = new Set(pendingProvisioning.map((entry) => entry.sshTargetId))
+  const pendingSetups = [
+    ...pendingProvisioning.filter((entry) => !registeredTargets.has(entry.sshTargetId)),
+    ...pendingMigrations.filter((entry) => !provisioningTargets.has(entry.sshTargetId))
+  ]
+
   return {
     environments,
     targets,
     pendingMigrations,
+    pendingSetups,
     statuses,
     loading,
     loadError,

@@ -230,6 +230,18 @@ describe('SshConnectionStore', () => {
       expect(sshStore.listTargets()).toEqual([])
     })
 
+    it('hides provisioning intent before ownership is claimed and retires it on explicit release', () => {
+      addTarget({ orcadProvisioning: { requestId: 'request-1', name: 'Managed server' } })
+      expect(sshStore.listTargets()).toEqual([])
+      expect(sshStore.assertOrcadRuntimeTargetClaimable('ssh-1', 'environment-1').id).toBe('ssh-1')
+      sshStore.claimOrcadRuntimeTarget('ssh-1', 'environment-1')
+      expect(sshStore.releaseOrcadRuntimeTarget('ssh-1', 'wrong-environment')).toBeNull()
+      expect(sshStore.getTarget('ssh-1')?.orcadProvisioning).toBeDefined()
+      sshStore.releaseOrcadRuntimeTarget('ssh-1', 'environment-1')
+      expect(sshStore.getTarget('ssh-1')?.orcadProvisioning).toBeUndefined()
+      expect(sshStore.listTargets()).toHaveLength(1)
+    })
+
     it('reports exact drainable, live-or-unverifiable, and client-owned blockers', () => {
       addTarget({
         portForwards: [

@@ -19,6 +19,11 @@ import type {
 } from '../../shared/orcad-managed-runtime'
 import type { OrcadMigrationPreflight } from '../../shared/orcad-migration-preflight'
 import type {
+  OrcadSshPendingProvisioning,
+  OrcadSshProvisioningRequest,
+  OrcadSshProvisioningResult
+} from '../../shared/orcad-ssh-provisioning'
+import type {
   BrowserClientHostPlacementPreparationRequest,
   BrowserPageCreationPlacement
 } from '../../shared/browser-client-host-placement'
@@ -115,6 +120,9 @@ export type RuntimeApi = {
     }) => Promise<VerifyAndAddRuntimeEnvironmentResult>
     resolve: (args: { selector: string }) => Promise<PublicKnownRuntimeEnvironment>
     listPendingOrcadMigrations: () => Promise<OrcadManagedPendingMigration[]>
+    createOrcadSshHost: (args: OrcadSshProvisioningRequest) => Promise<OrcadSshProvisioningResult>
+    resumeOrcadSshHost: (args: { requestId: string }) => Promise<OrcadSshProvisioningResult>
+    listPendingOrcadSshProvisioning: () => Promise<OrcadSshPendingProvisioning[]>
     preflightOrcadTarget: (args: { sshTargetId: string }) => Promise<OrcadMigrationPreflight>
     deployOrcad: (args: {
       name: string

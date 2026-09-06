@@ -29,6 +29,10 @@ export const runtimeEnvironmentsApi = {
     ipcRenderer.invoke('runtimeEnvironments:resolve', args),
   listPendingOrcadMigrations: () =>
     ipcRenderer.invoke('runtimeEnvironments:listPendingOrcadMigrations'),
+  createOrcadSshHost: (args) => ipcRenderer.invoke('runtimeEnvironments:createOrcadSshHost', args),
+  resumeOrcadSshHost: (args) => ipcRenderer.invoke('runtimeEnvironments:resumeOrcadSshHost', args),
+  listPendingOrcadSshProvisioning: () =>
+    ipcRenderer.invoke('runtimeEnvironments:listPendingOrcadSshProvisioning'),
   preflightOrcadTarget: (args) =>
     ipcRenderer.invoke('runtimeEnvironments:preflightOrcadTarget', args),
   deployOrcad: (args) => ipcRenderer.invoke('runtimeEnvironments:deployOrcad', args),

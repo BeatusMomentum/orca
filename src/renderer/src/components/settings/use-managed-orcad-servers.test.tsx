@@ -24,6 +24,7 @@ const pairedEnvironment = {
 
 const list = vi.fn()
 const listPendingOrcadMigrations = vi.fn()
+const listPendingOrcadSshProvisioning = vi.fn()
 const listTargets = vi.fn()
 const getOrcadStatus = vi.fn()
 const preflightOrcadTarget = vi.fn()
@@ -37,6 +38,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   list.mockResolvedValue([managedEnvironment, pairedEnvironment])
   listPendingOrcadMigrations.mockResolvedValue([])
+  listPendingOrcadSshProvisioning.mockResolvedValue([])
   listTargets.mockResolvedValue([
     {
       id: 'ssh-available',
@@ -66,6 +68,7 @@ beforeEach(() => {
       runtimeEnvironments: {
         list,
         listPendingOrcadMigrations,
+        listPendingOrcadSshProvisioning,
         getOrcadStatus,
         preflightOrcadTarget,
         deployOrcad,
