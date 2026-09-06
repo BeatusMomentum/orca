@@ -184,7 +184,11 @@ describe('SshPtyProvider', () => {
   })
 
   it('shutdown sends pty.shutdown request', async () => {
+    mux.request.mockResolvedValueOnce([{ id: 'pty-1' }])
+    await provider.listProcesses()
+    expect(provider.hasPty(scopedPty1)).toBe(true)
     await provider.shutdown(scopedPty1, { immediate: true })
+    expect(provider.hasPty(scopedPty1)).toBe(false)
     expectRequest(
       mux.request,
       'pty.shutdown',

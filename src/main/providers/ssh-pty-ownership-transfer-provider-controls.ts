@@ -104,7 +104,7 @@ export class SshPtyOwnershipTransferProviderControls {
         keepHistory: opts.keepHistory,
         timeoutMs: timeoutUntil(opts.deadlineMs)
       })
-      this.livePtyIds.delete(this.toRelayPtyId(id))
+      this.livePtyIds.delete(ptyId)
       return
     }
     if (opts.keepHistory) {
@@ -124,7 +124,7 @@ export class SshPtyOwnershipTransferProviderControls {
       throw new Error('pty_ownership_transfer_route_unavailable')
     }
     await routed
-    this.livePtyIds.delete(this.toRelayPtyId(id))
+    this.livePtyIds.delete(ptyId)
   }
 
   sendSignal = (id: string, signal: string, retry?: PtyProviderOperationRetry): Promise<void> => {
