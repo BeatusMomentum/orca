@@ -2,8 +2,9 @@ import { sendRemoteRuntimeRequest } from '../../shared/remote-runtime-client'
 import { getManagedOrcadOwnerEnvironmentId } from '../../shared/managed-orcad-ssh-owner'
 import {
   getPreferredPairingOffer,
+  getRuntimeSshAccess,
   type KnownRuntimeEnvironment,
-  type OrcadDeploymentLink
+  type RuntimeSshTunnelLink
 } from '../../shared/runtime-environments'
 import type { SshConnection } from './ssh-connection'
 import type { SshConnectionManager } from './ssh-connection-manager'
@@ -43,7 +44,7 @@ type ResumeRecoveryDependencies = {
 }
 
 type ResolvedManagedTunnelEnvironment = {
-  deployment: OrcadDeploymentLink
+  deployment: RuntimeSshTunnelLink
   environment: KnownRuntimeEnvironment
 }
 
@@ -214,7 +215,7 @@ export class OrcadManagedTunnelResumeRecovery {
     options: OrcadManagedTunnelResumeOptions
   ): ResolvedManagedTunnelEnvironment | null {
     const environment = options.resolveEnvironment(environmentId)
-    const deployment = environment?.orcadDeployment
+    const deployment = environment ? getRuntimeSshAccess(environment) : undefined
     const target = this.dependencies.getTargetStore()?.getTarget(active.targetId)
     if (
       !environment ||

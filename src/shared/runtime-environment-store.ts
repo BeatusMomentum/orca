@@ -86,6 +86,7 @@ export function addEnvironmentFromPairingCode(
 export function removeEnvironment(userDataPath: string, selector: string): KnownRuntimeEnvironment {
   const store = readEnvironmentStore(userDataPath)
   const environment = resolveEnvironmentFromStore(store, selector)
+  assertNoIndependentSshAccess(environment)
   writeEnvironmentStore(userDataPath, {
     version: 1,
     environments: store.environments.filter((entry) => entry.id !== environment.id)
@@ -107,6 +108,7 @@ export function updateEnvironmentFromPairingCode(
   }
   const store = readEnvironmentStore(userDataPath)
   const existing = resolveEnvironmentFromStore(store, selector)
+  assertNoIndependentSshAccess(existing)
   const now = args.now ?? Date.now()
   const previousPairingRevision = existing.pairingRevision ?? existing.createdAt
   const environment = createEnvironmentFromPairingOffer({
@@ -141,6 +143,7 @@ export function restoreManagedOrcadEnvironmentLink(
 ): KnownRuntimeEnvironment {
   const store = readEnvironmentStore(userDataPath)
   const existing = resolveEnvironmentFromStore(store, selector)
+  assertNoIndependentSshAccess(existing)
   const localPort = getPreferredLoopbackRuntimePort(existing)
   if (localPort === null) {
     throw new RuntimeEnvironmentStoreError(
@@ -187,6 +190,15 @@ function managedOrcadDeploymentLinksEqual(
     left.localPort === right.localPort &&
     left.remotePort === right.remotePort
   )
+}
+
+function assertNoIndependentSshAccess(environment: KnownRuntimeEnvironment): void {
+  if (environment.sshAccess || environment.pendingSshAccessOperation) {
+    throw new RuntimeEnvironmentStoreError(
+      'invalid_argument',
+      "Unlink this server's SSH access before replacing its pairing, removing it, or managing its deployment."
+    )
+  }
 }
 
 function getPairingSshMetadata(
@@ -241,6 +253,15 @@ export function markEnvironmentUsed(
   const runtimeIdChanged = args.runtimeId != null && args.runtimeId !== environment.runtimeId
   const pairedDeviceIdChanged =
     args.pairedDeviceId != null && args.pairedDeviceId !== environment.pairedDeviceId
+  if (
+    (runtimeIdChanged || pairedDeviceIdChanged) &&
+    (environment.sshAccess || environment.pendingSshAccessOperation)
+  ) {
+    throw new RuntimeEnvironmentStoreError(
+      'invalid_argument',
+      'SSH access operation cannot change the paired runtime identity.'
+    )
+  }
   const lastUsedIsFresh =
     environment.lastUsedAt != null &&
     now >= environment.lastUsedAt &&

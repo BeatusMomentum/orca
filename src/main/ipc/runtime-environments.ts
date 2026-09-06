@@ -23,6 +23,7 @@ import { RUNTIME_ENVIRONMENT_HANDLER_CHANNELS } from './runtime-environment-hand
 import { retirePairedRuntimeBrowserClientHostEnvironment } from '../browser/paired-runtime-browser-client-host-runtime'
 import { registerRuntimeEnvironmentBrowserClientHostHandler } from './runtime-environment-browser-client-host-handler'
 import { registerOrcadRuntimeLifecycleHandlers } from './orcad-runtime-lifecycle-handlers'
+import { registerRuntimeSshAccessHandlers } from './runtime-ssh-access-handlers'
 import { advanceRuntimeEnvironmentCapabilityIncarnation } from './runtime-environment-capability-evidence'
 
 type RetainedRemoteRuntimeSubscription = RemoteRuntimeSubscription & {
@@ -98,6 +99,10 @@ export function registerRuntimeEnvironmentHandlers(store: Store): void {
   })
   registerRuntimeEnvironmentRecoveryHandler()
   registerRuntimeEnvironmentPassiveHandlers(getUserDataPath)
+  registerRuntimeSshAccessHandlers({
+    getUserDataPath,
+    invalidateTransport: invalidateRuntimeEnvironmentTransport
+  })
   registerOrcadRuntimeLifecycleHandlers({
     getUserDataPath,
     getActiveEnvironmentId: () => store.getSettings().activeRuntimeEnvironmentId,

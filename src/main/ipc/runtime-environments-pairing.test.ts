@@ -144,6 +144,11 @@ describe('registerRuntimeEnvironmentHandlers', () => {
       'runtimeEnvironments:retryConnectionsNow',
       'runtimeEnvironments:getStatus',
       'runtimeEnvironments:call',
+      'runtimeEnvironments:linkSshAccess',
+      'runtimeEnvironments:unlinkSshAccess',
+      'runtimeEnvironments:createOrcadSshHost',
+      'runtimeEnvironments:resumeOrcadSshHost',
+      'runtimeEnvironments:listPendingOrcadSshProvisioning',
       'runtimeEnvironments:listPendingOrcadMigrations',
       'runtimeEnvironments:preflightOrcadTarget',
       'runtimeEnvironments:deployOrcad',
@@ -177,6 +182,11 @@ describe('registerRuntimeEnvironmentHandlers', () => {
       'runtimeEnvironments:call',
       'runtimeEnvironments:subscribe',
       'runtimeEnvironments:unsubscribe',
+      'runtimeEnvironments:linkSshAccess',
+      'runtimeEnvironments:unlinkSshAccess',
+      'runtimeEnvironments:createOrcadSshHost',
+      'runtimeEnvironments:resumeOrcadSshHost',
+      'runtimeEnvironments:listPendingOrcadSshProvisioning',
       'runtimeEnvironments:listPendingOrcadMigrations',
       'runtimeEnvironments:preflightOrcadTarget',
       'runtimeEnvironments:deployOrcad',
@@ -188,6 +198,9 @@ describe('registerRuntimeEnvironmentHandlers', () => {
       'runtimeEnvironments:retryConnectionsNow'
     ])
     expect(removeAllListenersMock).toHaveBeenCalledWith('runtimeEnvironments:subscriptionBinary')
+    expect(new Set(removeHandlerMock.mock.calls.map((call) => call[0]))).toEqual(
+      new Set(handleMock.mock.calls.map((call) => call[0]))
+    )
   })
 
   it('advances pending shared-control reconnects through IPC', async () => {

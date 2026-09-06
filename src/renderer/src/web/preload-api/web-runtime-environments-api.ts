@@ -159,6 +159,8 @@ export function createRuntimeEnvironmentsApi(): NonNullable<
       redactStoredWebRuntimeEnvironment(resolveEnvironment(selector)),
     listPendingOrcadMigrations: async () => desktopOnlyOrcad(),
     createOrcadSshHost: async () => desktopOnlyOrcad(),
+    linkSshAccess: async () => desktopOnlyOrcad(),
+    unlinkSshAccess: async () => desktopOnlyOrcad(),
     resumeOrcadSshHost: async () => desktopOnlyOrcad(),
     listPendingOrcadSshProvisioning: async () => desktopOnlyOrcad(),
     preflightOrcadTarget: async () => desktopOnlyOrcad(),

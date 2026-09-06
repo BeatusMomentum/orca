@@ -44,7 +44,7 @@ export function readEnvironmentStore(userDataPath: string): RuntimeEnvironmentSt
       )
     )
     return {
-      version: 1,
+      version: parsed.version,
       environments: parsed.environments
         .map((entry) => KnownRuntimeEnvironmentSchema.parse(entry))
         .sort((a, b) => a.name.localeCompare(b.name))
@@ -62,7 +62,15 @@ export function writeEnvironmentStore(userDataPath: string, store: RuntimeEnviro
   try {
     writeSecureJsonFileWithinLimit(
       path,
-      RuntimeEnvironmentStoreSchema.parse(store),
+      RuntimeEnvironmentStoreSchema.parse({
+        ...store,
+        // Older readers strip unknown access links; refuse their rewrites until access is unlinked.
+        version: store.environments.some(
+          (environment) => environment.sshAccess || environment.pendingSshAccessOperation
+        )
+          ? 2
+          : 1
+      }),
       MAX_RUNTIME_ENVIRONMENT_STORE_FILE_BYTES
     )
   } catch (error) {

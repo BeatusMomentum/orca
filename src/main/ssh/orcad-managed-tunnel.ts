@@ -1,4 +1,7 @@
-import type { KnownRuntimeEnvironment } from '../../shared/runtime-environments'
+import {
+  getRuntimeSshAccess,
+  type KnownRuntimeEnvironment
+} from '../../shared/runtime-environments'
 import { resolveEnvironment } from '../../shared/runtime-environment-store'
 import type { SshTarget } from '../../shared/ssh-types'
 import { getManagedOrcadOwnerEnvironmentId } from '../../shared/managed-orcad-ssh-owner'
@@ -51,15 +54,18 @@ export class OrcadManagedTunnelManager {
     })
   }
 
-  ensure(environment: KnownRuntimeEnvironment): Promise<void> {
-    if (!environment.orcadDeployment) {
+  ensure(
+    environment: KnownRuntimeEnvironment,
+    resolveCurrent: () => KnownRuntimeEnvironment | null = () => environment
+  ): Promise<void> {
+    if (!getRuntimeSshAccess(environment)) {
       return Promise.resolve()
     }
     const pending = this.inFlight.get(environment.id)
     if (pending) {
       return pending
     }
-    const operation = this.ensureManagedTunnel(environment).finally(() => {
+    const operation = this.ensureManagedTunnel(environment, resolveCurrent).finally(() => {
       if (this.inFlight.get(environment.id) === operation) {
         this.inFlight.delete(environment.id)
       }
@@ -77,7 +83,17 @@ export class OrcadManagedTunnelManager {
     if (!target.generation) {
       throw new Error('Managed Orca SSH target has no registration generation.')
     }
+    const managerGeneration = this.managerGeneration
+    const ownershipGeneration = (this.ownershipGenerations.get(environmentId) ?? 0) + 1
+    const transportGeneration = connection.getTransportGeneration()
+    const stillCurrent = (): boolean =>
+      this.managerGeneration === managerGeneration &&
+      this.ownershipGenerations.get(environmentId) === ownershipGeneration &&
+      connection.getTransportGeneration() === transportGeneration
     await this.close(environmentId)
+    if (!stillCurrent()) {
+      throw new Error('Orca SSH tunnel setup was superseded.')
+    }
     const forward = await this.forwards.addForward(
       target.id,
       connection,
@@ -86,6 +102,10 @@ export class OrcadManagedTunnelManager {
       remotePort,
       `Managed Orca server`
     )
+    if (!stillCurrent()) {
+      await this.forwards.removeForwardAndWait(forward.id)
+      throw new Error('Orca SSH tunnel setup was superseded.')
+    }
     this.active.set(environmentId, {
       connection,
       forwardId: forward.id,
@@ -93,7 +113,7 @@ export class OrcadManagedTunnelManager {
       remotePort: forward.remotePort,
       sshTargetGeneration: target.generation,
       targetId: target.id,
-      transportGeneration: connection.getTransportGeneration()
+      transportGeneration
     })
     return forward.localPort
   }
@@ -124,8 +144,11 @@ export class OrcadManagedTunnelManager {
     return this.resumeRecovery.recover(options)
   }
 
-  private async ensureManagedTunnel(environment: KnownRuntimeEnvironment): Promise<void> {
-    const deployment = environment.orcadDeployment
+  private async ensureManagedTunnel(
+    environment: KnownRuntimeEnvironment,
+    resolveCurrent: () => KnownRuntimeEnvironment | null
+  ): Promise<void> {
+    const deployment = getRuntimeSshAccess(environment)
     if (!deployment || environment.connectionDependency !== 'ssh-tunnel') {
       throw new Error('Managed orcad environment is missing its SSH tunnel dependency.')
     }
@@ -144,7 +167,32 @@ export class OrcadManagedTunnelManager {
       throw new Error('The SSH target is no longer owned by this managed Orca server.')
     }
 
+    const managerGeneration = this.managerGeneration
+    const ownershipGeneration = this.ownershipGenerations.get(environment.id) ?? 0
+    const stillOwned = (): boolean => {
+      const currentTarget = targetStore.getTarget(target.id)
+      const currentEnvironment = resolveCurrent()
+      const currentAccess = currentEnvironment ? getRuntimeSshAccess(currentEnvironment) : undefined
+      return (
+        this.managerGeneration === managerGeneration &&
+        (this.ownershipGenerations.get(environment.id) ?? 0) === ownershipGeneration &&
+        currentTarget?.generation === target.generation &&
+        getManagedOrcadOwnerEnvironmentId(currentTarget?.owner) === environment.id &&
+        currentEnvironment?.id === environment.id &&
+        currentEnvironment.runtimeId === environment.runtimeId &&
+        (currentEnvironment.pairingRevision ?? currentEnvironment.createdAt) ===
+          (environment.pairingRevision ?? environment.createdAt) &&
+        currentEnvironment.connectionDependency === 'ssh-tunnel' &&
+        currentAccess?.sshTargetId === deployment.sshTargetId &&
+        currentAccess.sshTargetGeneration === deployment.sshTargetGeneration &&
+        currentAccess.localPort === deployment.localPort &&
+        currentAccess.remotePort === deployment.remotePort
+      )
+    }
     const connection = await connectionManager.connect(target)
+    if (!stillOwned()) {
+      return
+    }
     const transportGeneration = connection.getTransportGeneration()
     const active = this.active.get(environment.id)
     if (
@@ -159,7 +207,12 @@ export class OrcadManagedTunnelManager {
     }
     if (active) {
       await this.forwards.removeForwardAndWait(active.forwardId)
-      this.active.delete(environment.id)
+      if (this.active.get(environment.id) === active) {
+        this.active.delete(environment.id)
+      }
+    }
+    if (!stillOwned()) {
+      return
     }
     const forward = await this.forwards.addForward(
       target.id,
@@ -172,6 +225,10 @@ export class OrcadManagedTunnelManager {
     if (forward.localPort !== deployment.localPort) {
       await this.forwards.removeForwardAndWait(forward.id)
       throw new Error('Managed Orca tunnel bound an unexpected local port.')
+    }
+    if (!stillOwned()) {
+      await this.forwards.removeForwardAndWait(forward.id)
+      return
     }
     this.active.set(environment.id, {
       connection,
@@ -194,7 +251,14 @@ export async function ensureOrcadManagedTunnel(
   userDataPath: string,
   selector: string
 ): Promise<void> {
-  await managedTunnels.ensure(resolveEnvironment(userDataPath, selector))
+  const environment = resolveEnvironment(userDataPath, selector)
+  await managedTunnels.ensure(environment, () => {
+    try {
+      return resolveEnvironment(userDataPath, environment.id)
+    } catch {
+      return null
+    }
+  })
 }
 
 export function disposeOrcadManagedTunnels(): void {

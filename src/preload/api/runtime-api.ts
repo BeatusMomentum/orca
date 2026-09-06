@@ -1,4 +1,8 @@
 import type {
+  RuntimeSshAccessLinkRequest,
+  RuntimeSshAccessUnlinkRequest
+} from '../../shared/runtime-ssh-access'
+import type {
   RuntimeBrowserDriverState,
   RuntimeRendererSyncWindowGraph,
   RuntimeStatus,
@@ -123,6 +127,8 @@ export type RuntimeApi = {
     createOrcadSshHost: (args: OrcadSshProvisioningRequest) => Promise<OrcadSshProvisioningResult>
     resumeOrcadSshHost: (args: { requestId: string }) => Promise<OrcadSshProvisioningResult>
     listPendingOrcadSshProvisioning: () => Promise<OrcadSshPendingProvisioning[]>
+    linkSshAccess: (args: RuntimeSshAccessLinkRequest) => Promise<PublicKnownRuntimeEnvironment>
+    unlinkSshAccess: (args: RuntimeSshAccessUnlinkRequest) => Promise<PublicKnownRuntimeEnvironment>
     preflightOrcadTarget: (args: { sshTargetId: string }) => Promise<OrcadMigrationPreflight>
     deployOrcad: (args: {
       name: string

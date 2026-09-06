@@ -21,30 +21,88 @@ export type PublicRuntimeAccessEndpoint = z.infer<typeof PublicRuntimeAccessEndp
 export const RuntimeEnvironmentSourceSchema = z.enum(['manual', 'ephemeral-vm'])
 export type RuntimeEnvironmentSource = z.infer<typeof RuntimeEnvironmentSourceSchema>
 
-export const OrcadDeploymentLinkSchema = z.object({
+export const RuntimeSshTunnelLinkSchema = z.object({
   sshTargetId: z.string().min(1),
   sshTargetGeneration: z.number().int().positive(),
   localPort: z.number().int().min(1).max(65_535),
   remotePort: z.number().int().min(1).max(65_535)
 })
 
-export type OrcadDeploymentLink = z.infer<typeof OrcadDeploymentLinkSchema>
-
-export const KnownRuntimeEnvironmentSchema = z.object({
-  id: z.string().min(1),
-  name: z.string().min(1),
-  createdAt: z.number().finite(),
-  updatedAt: z.number().finite(),
-  pairingRevision: z.number().finite().optional(),
-  pairedDeviceId: z.string().min(1).optional(),
-  lastUsedAt: z.number().finite().nullable(),
-  runtimeId: z.string().min(1).nullable(),
-  source: RuntimeEnvironmentSourceSchema.optional(),
-  connectionDependency: z.literal('ssh-tunnel').optional(),
-  orcadDeployment: OrcadDeploymentLinkSchema.optional(),
-  endpoints: z.array(RuntimeAccessEndpointSchema).min(1),
-  preferredEndpointId: z.string().min(1)
+export type RuntimeSshTunnelLink = z.infer<typeof RuntimeSshTunnelLinkSchema>
+export const RuntimeSshAccessLinkSchema = RuntimeSshTunnelLinkSchema.extend({
+  requestId: z.string().min(1).optional(),
+  targetFingerprint: z.string().min(1).optional(),
+  endpointId: z.string().min(1),
+  previousPreferredEndpointId: z.string().min(1)
 })
+export type RuntimeSshAccessLink = z.infer<typeof RuntimeSshAccessLinkSchema>
+export const OrcadDeploymentLinkSchema = RuntimeSshTunnelLinkSchema
+export type OrcadDeploymentLink = RuntimeSshTunnelLink
+export const RuntimeSshAccessOperationSchema = RuntimeSshTunnelLinkSchema.omit({ localPort: true })
+  .extend({
+    requestId: z.string().min(1),
+    operation: z.enum(['link', 'unlink']),
+    targetFingerprint: z.string().min(1).optional()
+  })
+  .refine((intent) => intent.operation !== 'link' || !!intent.targetFingerprint, {
+    message: 'Link intent requires a target fingerprint.'
+  })
+export type RuntimeSshAccessOperation = z.infer<typeof RuntimeSshAccessOperationSchema>
+
+export const KnownRuntimeEnvironmentSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    createdAt: z.number().finite(),
+    updatedAt: z.number().finite(),
+    pairingRevision: z.number().finite().optional(),
+    pairedDeviceId: z.string().min(1).optional(),
+    lastUsedAt: z.number().finite().nullable(),
+    runtimeId: z.string().min(1).nullable(),
+    source: RuntimeEnvironmentSourceSchema.optional(),
+    connectionDependency: z.literal('ssh-tunnel').optional(),
+    orcadDeployment: OrcadDeploymentLinkSchema.optional(),
+    sshAccess: RuntimeSshAccessLinkSchema.optional(),
+    pendingSshAccessOperation: RuntimeSshAccessOperationSchema.optional(),
+    endpoints: z.array(RuntimeAccessEndpointSchema).min(1),
+    preferredEndpointId: z.string().min(1)
+  })
+  .refine(
+    ({ pendingSshAccessOperation, sshAccess, orcadDeployment, connectionDependency }) =>
+      !pendingSshAccessOperation || (!sshAccess && !orcadDeployment && !connectionDependency),
+    {
+      message: 'Pending SSH access operations cannot coexist with active SSH access.',
+      path: ['pendingSshAccessOperation']
+    }
+  )
+  .refine(
+    ({ orcadDeployment, sshAccess }) =>
+      !orcadDeployment || !sshAccess || sameRuntimeSshAccess(orcadDeployment, sshAccess),
+    {
+      message: 'Runtime SSH access conflicts with its managed deployment link.',
+      path: ['sshAccess']
+    }
+  )
+  .refine(
+    (environment) => {
+      const access = environment.sshAccess
+      return (
+        !access ||
+        (environment.connectionDependency === 'ssh-tunnel' &&
+          environment.preferredEndpointId === access.endpointId &&
+          access.previousPreferredEndpointId !== access.endpointId &&
+          environment.endpoints.some(
+            (endpoint) => endpoint.id === access.previousPreferredEndpointId
+          ) &&
+          getPreferredLoopbackRuntimePort(environment) === access.localPort)
+      )
+    },
+    {
+      message:
+        'Runtime SSH access must preserve its previous endpoint and prefer its loopback endpoint.',
+      path: ['sshAccess']
+    }
+  )
 
 export type KnownRuntimeEnvironment = z.infer<typeof KnownRuntimeEnvironmentSchema>
 
@@ -64,7 +122,7 @@ export function redactRuntimeEnvironment(
 }
 
 export const RuntimeEnvironmentStoreSchema = z.object({
-  version: z.literal(1),
+  version: z.union([z.literal(1), z.literal(2)]),
   environments: z.array(KnownRuntimeEnvironmentSchema)
 })
 
@@ -119,6 +177,26 @@ export function isManagedOrcadRuntimeEnvironment(
   return environment.orcadDeployment !== undefined
 }
 
+/** SSH is an access path; only orcadDeployment grants managed lifecycle ownership. */
+export function getRuntimeSshAccess(
+  environment: Pick<KnownRuntimeEnvironment, 'orcadDeployment' | 'sshAccess'>
+): RuntimeSshTunnelLink | undefined {
+  const { orcadDeployment, sshAccess } = environment
+  if (orcadDeployment && sshAccess && !sameRuntimeSshAccess(orcadDeployment, sshAccess)) {
+    throw new Error('Runtime SSH access conflicts with its managed deployment link.')
+  }
+  return orcadDeployment ?? sshAccess
+}
+
+function sameRuntimeSshAccess(left: RuntimeSshTunnelLink, right: RuntimeSshTunnelLink): boolean {
+  return (
+    left.sshTargetId === right.sshTargetId &&
+    left.sshTargetGeneration === right.sshTargetGeneration &&
+    left.localPort === right.localPort &&
+    left.remotePort === right.remotePort
+  )
+}
+
 export function isUserManagedRuntimeEnvironment(
   environment: Pick<PublicKnownRuntimeEnvironment, 'source'>
 ): boolean {
@@ -141,9 +219,10 @@ export function getPreferredPairingOffer(environment: KnownRuntimeEnvironment): 
   }
 }
 
-export function getPreferredLoopbackRuntimePort(
-  environment: KnownRuntimeEnvironment
-): number | null {
+export function getPreferredLoopbackRuntimePort(environment: {
+  endpoints: { id: string; endpoint: string }[]
+  preferredEndpointId: string
+}): number | null {
   const endpoint = environment.endpoints.find(
     (entry) => entry.id === environment.preferredEndpointId
   )
@@ -153,7 +232,8 @@ export function getPreferredLoopbackRuntimePort(
   try {
     const url = new URL(endpoint.endpoint)
     const port = Number(url.port)
-    return classifyRemotePairingHostname(url.hostname) === 'loopback' &&
+    return (url.protocol === 'ws:' || url.protocol === 'wss:') &&
+      classifyRemotePairingHostname(url.hostname) === 'loopback' &&
       Number.isInteger(port) &&
       port >= 1 &&
       port <= 65_535

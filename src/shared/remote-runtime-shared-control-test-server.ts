@@ -33,6 +33,7 @@ type ServerOptions = {
   disableAutoPong?: boolean
   delayedMethods?: string[]
   silentMethods?: string[]
+  responseResult?: (request: SharedControlTestServer['requests'][number]) => unknown
 }
 
 const servers: WebSocketServer[] = []
@@ -174,7 +175,7 @@ function handleRequest(
   const streaming = isStreamingMethod(request.method)
   const result = streaming
     ? { type: 'ready', subscriptionId: `${request.method}:subscription` }
-    : { method: request.method }
+    : (options.responseResult?.(request) ?? { method: request.method })
   const sendResponse = (): void => {
     if (options.sendUnknownResponseBeforeResponse) {
       sendEncrypted(ws, sharedKey, {
