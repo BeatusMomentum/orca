@@ -244,6 +244,7 @@ export function RuntimeEnvironmentsPane({
         onConnect={(environment) => void connectEnvironment(environment)}
         onDisconnect={(environment) => void disconnectEnvironment(environment)}
         onRemove={openRemoveDialog}
+        onSshAccessChanged={loadEnvironments}
       />
 
       <div className={cn('space-y-5 pt-2', visibleWorkflow !== 'cloud-vm' && 'hidden')}>

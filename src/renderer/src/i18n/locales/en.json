@@ -1,4 +1,21 @@
 {
+  "runtimeSshAccess": {
+    "pending": "SSH access pending",
+    "title": "SSH access",
+    "help": "Use SSH to reach this paired server. This does not install or stop the server, or move its work.",
+    "recovery": "An interrupted SSH access change needs retry or cancellation.",
+    "port": "Server port",
+    "target": "SSH target",
+    "choose": "Choose an unused SSH target",
+    "empty": "Import an unused target in SSH Hosts first. Targets with existing work cannot be linked here.",
+    "nativePort": "Use the native Orca listener port, not a reverse-proxy HTTPS port.",
+    "close": "Close",
+    "cancel": "Cancel link",
+    "retry": "Retry",
+    "unlink": "Unlink SSH",
+    "link": "Link SSH",
+    "working": "Updating SSH access…"
+  },
   "sidebar": {
     "revealFiltered": {
       "title": "Reveal hidden workspace?",
