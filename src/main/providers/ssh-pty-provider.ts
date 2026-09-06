@@ -272,17 +272,7 @@ export class SshPtyProvider implements IPtyProvider {
     this.ownershipTransferControls.resize(id, cols, rows, retry)
   }
 
-  shutdown(
-    id: string,
-    opts: {
-      immediate?: boolean
-      keepHistory?: boolean
-      deadlineMs?: number
-      operationId?: string
-      expectedIncarnationId?: string
-      expectedOwnerClientInstanceId?: string
-    }
-  ): Promise<void> {
+  shutdown(id: string, opts: Parameters<IPtyProvider['shutdown']>[1]): Promise<void> {
     return this.ownershipTransferControls.shutdown(id, opts)
   }
 

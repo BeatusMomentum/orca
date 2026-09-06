@@ -5,7 +5,6 @@ import {
   REMOTE_RUNTIME_SHARED_CONTROL_CAPABILITY
 } from '../../shared/protocol-version'
 import { resolveEnvironment, markEnvironmentUsed } from '../../shared/runtime-environment-store'
-import { isOrchestrationMutation } from '../../shared/orchestration-rpc-contract'
 import type {
   RuntimeOrchestrationEnvelope,
   RuntimeRpcResponse
@@ -41,6 +40,7 @@ import {
 } from './runtime-environment-shared-control-support'
 import {
   executeSupportRoutedCall,
+  shouldUseSharedControlEnvelope,
   shouldRouteCallBySupport,
   shouldRouteSubscriptionBySupport,
   subscribeSupportRoutedRuntimeEnvironment
@@ -129,11 +129,7 @@ export async function callRuntimeEnvironment(
   options?: { signal?: AbortSignal }
 ): Promise<RuntimeRpcResponse<unknown>> {
   const environment = resolveEnvironment(userDataPath, selector)
-  // Why: connection failures reject (they don't resolve as ok:false), so the
-  // Tailscale hint is applied to the thrown error here — wrapping the resolved
-  // value would miss the in-use connect/timeout case the toast surfaces.
-  // Track the endpoint the queued closure actually used: it re-resolves the
-  // environment, so a re-pair between enqueue and dispatch can change it.
+  // Queued calls re-resolve pairing; use their actual endpoint for connection-error hints.
   let endpoint = getPreferredPairingOffer(environment).endpoint
   try {
     return await enqueueRuntimeCall(
@@ -308,14 +304,4 @@ function markEnvironmentUsedFromResponse(
 
 function shouldUseCachedRequestConnection(method: string): boolean {
   return method === 'terminal.send' || method === 'terminal.updateViewport'
-}
-
-function shouldUseSharedControlEnvelope(
-  method: string,
-  params: unknown,
-  envelope: RuntimeOrchestrationEnvelope | undefined
-): RuntimeOrchestrationEnvelope | undefined {
-  return envelope && method.startsWith('orchestration.') && !isOrchestrationMutation(method, params)
-    ? envelope
-    : undefined
 }

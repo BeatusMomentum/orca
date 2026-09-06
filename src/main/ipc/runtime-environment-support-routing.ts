@@ -1,3 +1,4 @@
+import { isOrchestrationMutation } from '../../shared/orchestration-rpc-contract'
 import { waitForPromiseWithSignal } from '../../shared/abort-signal-reason'
 import type { PairingOffer } from '../../shared/pairing'
 import type {
@@ -285,4 +286,14 @@ function subscriptionCallbacks(
       args.callbacks.onClose()
     }
   }
+}
+
+export function shouldUseSharedControlEnvelope(
+  method: string,
+  params: unknown,
+  envelope: RuntimeOrchestrationEnvelope | undefined
+): RuntimeOrchestrationEnvelope | undefined {
+  return envelope && method.startsWith('orchestration.') && !isOrchestrationMutation(method, params)
+    ? envelope
+    : undefined
 }

@@ -1,6 +1,6 @@
 // @ts-nocheck -- mechanically split from OrcaRuntimeService; behavior is covered by AST equivalence and characterization tests.
 import type { PtyOwnershipTransferOrchestrator } from './pty-ownership-transfer-orchestration'
-import { type RuntimeOwnedPtyOwnershipTransferReadOnlySource } from './pty-ownership-transfer-orchestration'
+import type { RuntimeOwnedPtyOwnershipTransferReadOnlySource } from './pty-ownership-transfer-orchestration'
 import type { PtyOwnershipTransferDestinationRuntimeRegistry } from '../persistence/pty-ownership-transfer/pty-ownership-transfer-destination-runtime'
 import type { PtyOwnershipTransferDestinationSnapshot } from '../../shared/pty-ownership-transfer-destination-adapter'
 import type { RuntimePtyOwnershipTransferSourceAdapter } from '../providers/runtime-pty-ownership-transfer-source-adapter'
