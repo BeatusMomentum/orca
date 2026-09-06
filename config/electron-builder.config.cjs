@@ -270,6 +270,7 @@ module.exports = {
     'out/main/grok/**',
     'out/main/hermes/**',
     'out/main/daemon-entry.js',
+    'out/main/windows-bun-pty-gate-entry.js',
     'out/main/session-scanner-service-entry.js',
     'out/main/wsl-transcript-fs-process-entry.js',
     'out/main/session-scanner-opencode-sqlite-worker-entry.js',

@@ -92,6 +92,7 @@ const LINUX_RELAY_PLATFORMS = ['linux-x64', 'linux-arm64'] as const
 export const RELAY_ARTIFACTS: readonly RelayArtifact[] = [
   { filename: 'relay.js' },
   { filename: 'relay-watcher.js', daemonServiceChild: true },
+  { filename: 'windows-bun-pty-gate-entry.js' },
   { filename: 'relay-ai-vault-service.js', daemonServiceChild: true },
   { filename: 'managed-hook-runtime.js' },
   // Forked by the AI Vault title reader; without it a relay answers every WSL

@@ -1,33 +1,31 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, win32 } from 'node:path'
 import {
   buildWindowsCmdCommand,
-  buildWindowsCmdShimCommandLine,
-  quoteWindowsCmdArgument
+  buildWindowsCmdShimCommandLine
 } from '../../../shared/child-process/windows-command-line'
 import { getCmdExePath } from '../../../shared/windows-batch-spawn'
+import {
+  WINDOWS_BUN_PTY_GATE_ENV,
+  WINDOWS_BUN_PTY_RUNTIME_OPTION_KEYS,
+  type WindowsBunPtyGateRequest
+} from './windows-bun-pty-gate'
 
-const GATE_ENV = 'ORCA_BUN_PTY_JOB_GATE'
-const COMMAND_ENV = 'ORCA_BUN_PTY_CHILD_COMMAND'
 const CLEAR_SEQUENCE = '\x1b[3J\x1b[2J\x1b[H'
 const CLEANUP_MAX_RETRIES = 5
 const CLEANUP_RETRY_DELAY_MS = 50
 
-function buildChildCommand(file: string, args: string[]): string {
-  const command = buildWindowsCmdCommand(file, args)
-  if (win32.basename(file).toLowerCase() !== 'cmd.exe') {
-    return command
-  }
-  const commandSwitch = args.findIndex((arg) => /^\/[ck]$/i.test(arg))
-  if (commandSwitch === -1) {
-    return command
-  }
-  // cmd parses /K and /C itself; quoting the switch corrupts its startup command.
-  return [
-    quoteWindowsCmdArgument(file),
-    ...args.map((arg, index) => (index === commandSwitch ? arg : quoteWindowsCmdArgument(arg)))
-  ].join(' ')
+export function resolveWindowsBunPtyGateEntry(
+  runtimeDir = __dirname,
+  pathExists: (path: string) => boolean = existsSync
+): string {
+  const directory = runtimeDir.replace(/app\.asar(?=[\\/]|$)/, 'app.asar.unpacked')
+  const candidates = [
+    join(directory, 'windows-bun-pty-gate-entry.js'),
+    join(directory, '..', 'windows-bun-pty-gate-entry.js')
+  ]
+  return candidates.find(pathExists) ?? candidates[0]!
 }
 
 function removeLaunchDirectory(directory: string): void {
@@ -47,38 +45,57 @@ export type WindowsBunPtyLaunch = {
   command: string[]
   clearCommand: string[]
   env: Record<string, string>
-  windowsVerbatimArguments: true
+  windowsVerbatimArguments: boolean
   release(): void
   dispose(): void
 }
 
-export function createWindowsBunPtyLaunch(args: {
-  file: string
-  args: string[]
-  env: Record<string, string>
-}): WindowsBunPtyLaunch {
-  const childCommand = buildChildCommand(args.file, args.args)
+export function createWindowsBunPtyLaunch(
+  args: {
+    file: string
+    args: string[]
+    env: Record<string, string>
+    cwd?: string
+  },
+  deps: { workerPath?: string; runtimePath?: string } = {}
+): WindowsBunPtyLaunch {
+  if (win32.basename(args.file).toLowerCase() === 'cmd.exe') {
+    buildWindowsCmdCommand(args.file, args.args)
+  }
+  const workerPath = deps.workerPath ?? resolveWindowsBunPtyGateEntry()
+  if (!existsSync(workerPath)) {
+    throw new Error(`Windows PTY gate entry not found: ${workerPath}`)
+  }
   const directory = mkdtempSync(join(tmpdir(), 'orca-bun-pty-'))
   const gatePath = join(directory, 'job-assigned')
-  const launchPath = join(directory, 'launch.cmd')
+  const requestPath = join(directory, 'request.json')
+  const configPath = join(directory, 'bunfig.toml')
   const clearPath = join(directory, 'clear.cmd')
   const cmdExe = getCmdExePath()
   let released = false
   let disposed = false
+  const env: Record<string, string> = { ...args.env, [WINDOWS_BUN_PTY_GATE_ENV]: gatePath }
+  const runtimeOptions: WindowsBunPtyGateRequest['runtimeOptions'] = {}
+  for (const key of WINDOWS_BUN_PTY_RUNTIME_OPTION_KEYS) {
+    if (env[key] !== undefined) {
+      runtimeOptions[key] = env[key]
+    }
+    delete env[key]
+  }
 
   try {
     writeFileSync(
-      launchPath,
-      [
-        '@echo off',
-        ':orca_wait_for_job',
-        `if not exist "%${GATE_ENV}%" goto orca_wait_for_job`,
-        `del /q "%${GATE_ENV}%" >nul 2>&1`,
-        `set "${GATE_ENV}=" & set "${COMMAND_ENV}=" & %${COMMAND_ENV}%`,
-        'exit /b %errorlevel%'
-      ].join('\r\n'),
-      { encoding: 'ascii', flag: 'wx' }
+      requestPath,
+      JSON.stringify({
+        file: args.file,
+        args: args.args,
+        cwd: args.cwd ?? process.cwd(),
+        gatePath,
+        runtimeOptions
+      } satisfies WindowsBunPtyGateRequest),
+      { encoding: 'utf8', flag: 'wx', mode: 0o600 }
     )
+    writeFileSync(configPath, '', { flag: 'wx', mode: 0o600 })
     writeFileSync(clearPath, `@echo off\r\n<nul set /p "=${CLEAR_SEQUENCE}"\r\n`, {
       encoding: 'ascii',
       flag: 'wx'
@@ -89,14 +106,18 @@ export function createWindowsBunPtyLaunch(args: {
   }
 
   return {
-    command: [cmdExe, buildWindowsCmdShimCommandLine(launchPath, [])],
+    // Run outside the workspace so its bunfig/.env/preloads cannot execute before job assignment.
+    command: [
+      deps.runtimePath ?? process.execPath,
+      '--no-env-file',
+      `--config=${configPath}`,
+      `--cwd=${directory}`,
+      workerPath,
+      requestPath
+    ],
     clearCommand: [cmdExe, buildWindowsCmdShimCommandLine(clearPath, [])],
-    env: {
-      ...args.env,
-      [GATE_ENV]: gatePath,
-      [COMMAND_ENV]: childCommand
-    },
-    windowsVerbatimArguments: true,
+    env,
+    windowsVerbatimArguments: false,
     release() {
       if (released) {
         return

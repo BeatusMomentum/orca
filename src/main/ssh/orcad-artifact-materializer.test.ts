@@ -47,6 +47,7 @@ function createTemplate(target: OrcadBunTarget = TARGET): {
   const common: Record<string, string> = {
     'orcad.js': 'orcad-entry',
     'daemon-entry.js': 'daemon-entry',
+    'windows-bun-pty-gate-entry.js': 'pty-gate-entry',
     'parcel-watcher-process-entry.js': 'watcher-process',
     'node_modules/@parcel/watcher/index.js': 'watcher-wrapper',
     [ORCAD_EMOJI_SHORTCODE_DATASET]: '{}'

@@ -47,6 +47,7 @@ export const ORCAD_ARTIFACTS: readonly OrcadArtifact[] = [
   { filename: 'parcel-watcher-process-entry.js' },
   // Forked so PTYs outlive the runtime process; its absence makes every restart destructive.
   { filename: 'daemon-entry.js' },
+  { filename: 'windows-bun-pty-gate-entry.js' },
   // Target-specific even when the JavaScript bundle is shared across packaged slots.
   { filename: ORCAD_BUILD_TARGET_FILENAME },
   // orcad never depends on a host runtime or host-installed native module.

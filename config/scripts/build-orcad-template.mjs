@@ -29,6 +29,7 @@ const buildDir = join(root, 'out', '.orcad-template-build')
 const commonArtifacts = [
   'orcad.js',
   'daemon-entry.js',
+  'windows-bun-pty-gate-entry.js',
   'parcel-watcher-process-entry.js',
   ORCAD_PARCEL_WATCHER_ENTRY,
   ORCAD_EMOJI_SHORTCODE_DATASET

@@ -6,10 +6,11 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  rmSync,
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { rm } from 'node:fs/promises'
+import { setTimeout as delay } from 'node:timers/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { orcadBunRuntimeFilename } from '../../src/shared/orcad-artifacts.ts'
@@ -70,6 +71,39 @@ function cli(pairingCode, args) {
     fail(`CLI ${args.join(' ')} failed: ${raw}`)
   }
   return response.result ?? response
+}
+
+async function removeLifecycleFixtureDirectory(directory) {
+  // Bun's Windows fs.rm does not reliably apply maxRetries after process teardown.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rm(directory, { recursive: true, force: true })
+      return
+    } catch (error) {
+      if (attempt >= 50 || !['EBUSY', 'EPERM', 'ENOTEMPTY'].includes(error.code)) {
+        throw error
+      }
+      await delay(100)
+    }
+  }
+}
+
+async function waitForLifecycleDaemonExit(pid) {
+  const deadline = Date.now() + 15_000
+  while (true) {
+    try {
+      process.kill(pid, 0)
+    } catch (error) {
+      if (error.code === 'ESRCH') {
+        return
+      }
+      throw error
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`Lifecycle daemon ${pid} did not exit during cleanup`)
+    }
+    await delay(50)
+  }
 }
 
 function waitForExit(child, timeoutMs = 15_000) {
@@ -362,14 +396,15 @@ try {
     } catch {
       // The daemon may already have retired after the runtime cleanup.
     }
+    await waitForLifecycleDaemonExit(pid)
   }
   if (!succeeded && process.env.ORCAD_E2E_KEEP_FAILED === '1') {
     console.error(`Retained failed lifecycle evidence: ${JSON.stringify({ dataRoot, repoRoot })}`)
   } else {
     if (worktreePath) {
-      rmSync(worktreePath, { recursive: true, force: true })
+      await removeLifecycleFixtureDirectory(worktreePath)
     }
-    rmSync(repoRoot, { recursive: true, force: true })
-    rmSync(dataRoot, { recursive: true, force: true })
+    await removeLifecycleFixtureDirectory(repoRoot)
+    await removeLifecycleFixtureDirectory(dataRoot)
   }
 }

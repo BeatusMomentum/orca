@@ -83,18 +83,20 @@ describe('verifyPackagedOrcadTemplate', () => {
   it('rejects target-native bytes changed after manifest generation', async () => {
     const fixture = await createFixture()
     await writeFile(
-      join(
-        fixture.templateDir,
-        ORCAD_TEMPLATE_TARGETS_DIR,
-        'linux-x64-glibc',
-        'watcher.node'
-      ),
+      join(fixture.templateDir, ORCAD_TEMPLATE_TARGETS_DIR, 'linux-x64-glibc', 'watcher.node'),
       'mutated'
     )
 
     expect(() => verifyPackagedOrcadTemplate(fixture.root)).toThrow(
       'linux-x64-glibc watcher checksum mismatch'
     )
+  })
+
+  it('rejects a missing Windows PTY gate worker', async () => {
+    const fixture = await createFixture()
+    await rm(join(fixture.templateDir, 'windows-bun-pty-gate-entry.js'))
+
+    expect(() => verifyPackagedOrcadTemplate(fixture.root)).toThrow('windows-bun-pty-gate-entry.js')
   })
 
   it('rejects a missing target before the package reaches deployment', async () => {

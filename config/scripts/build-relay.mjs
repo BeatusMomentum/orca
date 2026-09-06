@@ -45,6 +45,7 @@ const __dirname = import.meta.dirname
 const ROOT = join(__dirname, '..', '..')
 const RELAY_ENTRY = join(ROOT, 'src', 'relay', 'relay.ts')
 const WATCHER_ENTRY = join(ROOT, 'src', 'main', 'ipc', 'parcel-watcher-process-entry.ts')
+const PTY_GATE_ENTRY = join(ROOT, 'src/main/daemon/pty-subprocess/windows-bun-pty-gate-entry.ts')
 const AI_VAULT_SERVICE_ENTRY = join(ROOT, 'src', 'relay', 'ai-vault-service-entry.ts')
 const WSL_TRANSCRIPT_FS_PROCESS_ENTRY = join(
   ROOT,
@@ -328,6 +329,18 @@ for (const platform of RELAY_BUILD_PLATFORMS) {
   })
 
   await stageRelayWatcherNative(platform, outDir)
+
+  await build({
+    entryPoints: [PTY_GATE_ENTRY],
+    bundle: true,
+    platform: 'node',
+    target: 'node18',
+    format: 'cjs',
+    outfile: join(outDir, 'windows-bun-pty-gate-entry.js'),
+    sourcemap: false,
+    minify: true,
+    define: { 'process.env.NODE_ENV': '"production"' }
+  })
 
   if (isWindowsRelayPlatform(platform)) {
     copyFileSync(

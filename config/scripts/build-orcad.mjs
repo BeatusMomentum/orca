@@ -53,6 +53,8 @@ const WATCHER_OUT_FILE = join(OUT_DIR, 'parcel-watcher-process-entry.js')
 // orcad restart would SIGKILL every running terminal.
 const DAEMON_ENTRY = join(ROOT, 'src/main/daemon/daemon-entry.ts')
 const DAEMON_OUT_FILE = join(OUT_DIR, 'daemon-entry.js')
+const PTY_GATE_ENTRY = join(ROOT, 'src/main/daemon/pty-subprocess/windows-bun-pty-gate-entry.ts')
+const PTY_GATE_OUT_FILE = join(OUT_DIR, 'windows-bun-pty-gate-entry.js')
 const OUT_FILE = join(OUT_DIR, 'orcad.js')
 const BUILD_TARGET = process.env.ORCAD_BUILD_TARGET
 if (!BUILD_TARGET) {
@@ -189,7 +191,8 @@ function buildForkedChild(entryPoint, outfile) {
 
 const childResults = await Promise.all([
   buildForkedChild(WATCHER_ENTRY, WATCHER_OUT_FILE),
-  buildForkedChild(DAEMON_ENTRY, DAEMON_OUT_FILE)
+  buildForkedChild(DAEMON_ENTRY, DAEMON_OUT_FILE),
+  buildForkedChild(PTY_GATE_ENTRY, PTY_GATE_OUT_FILE)
 ])
 
 const result = await build({
