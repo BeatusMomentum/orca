@@ -22,11 +22,13 @@ import {
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import {
   ORCAD_BUILD_TARGET_FILENAME,
-  ORCAD_BUN_RUNTIME_FILENAME,
+  ORCAD_EMOJI_SHORTCODE_DATASET,
+  orcadBunRuntimeFilename,
+  orcadArtifactHashPrefix,
   ORCAD_PARCEL_WATCHER_ENTRY,
   ORCAD_PARCEL_WATCHER_NATIVE,
   ORCAD_VERSION,
@@ -141,13 +143,19 @@ if (targetIsCurrent) {
     )
   }
 }
-const bunRuntimeOutput = join(OUT_DIR, ORCAD_BUN_RUNTIME_FILENAME)
+const bunRuntimeOutput = join(OUT_DIR, orcadBunRuntimeFilename(BUILD_TARGET))
 copyFileSync(bunRuntimeSource, bunRuntimeOutput)
 writeFileSync(join(OUT_DIR, ORCAD_BUILD_TARGET_FILENAME), `${BUILD_TARGET}\n`)
 if (!targetIsWindows) {
   chmodSync(bunRuntimeOutput, 0o755)
 }
 await stageParcelWatcher(BUILD_TARGET)
+const emojiDatasetOutput = join(OUT_DIR, ORCAD_EMOJI_SHORTCODE_DATASET)
+mkdirSync(dirname(emojiDatasetOutput), { recursive: true })
+copyFileSync(
+  createRequire(import.meta.url).resolve('emojibase-data/en/shortcodes/emojibase.json'),
+  emojiDatasetOutput
+)
 if (existsSync(AGENT_BROWSER_SOURCE)) {
   copyFileSync(AGENT_BROWSER_SOURCE, AGENT_BROWSER_OUTPUT)
   if (!targetIsWindows) {
@@ -323,8 +331,8 @@ if (graphErrors.length > 0) {
 // already-`.install-complete` dir is never re-uploaded. The deploy would silently run stale
 // bytes while reporting the new version.
 if (process.exitCode !== 1) {
-  const hash = createHash('sha256')
-  for (const filename of orcadArtifactFilenames()) {
+  const hash = createHash('sha256').update(orcadArtifactHashPrefix(BUILD_TARGET))
+  for (const filename of orcadArtifactFilenames(BUILD_TARGET)) {
     const artifactPath = join(OUT_DIR, filename)
     if (!existsSync(artifactPath)) {
       throw new Error(

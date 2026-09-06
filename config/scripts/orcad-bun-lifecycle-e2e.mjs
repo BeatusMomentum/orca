@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { ORCAD_BUN_RUNTIME_FILENAME } from '../../src/shared/orcad-artifacts.ts'
+import { orcadBunRuntimeFilename } from '../../src/shared/orcad-artifacts.ts'
 import { selectOrcadLifecycleRuntime } from './orcad-bun-lifecycle-runtime-selection.mjs'
 
 const root = join(import.meta.dirname, '..', '..')
@@ -19,7 +19,7 @@ const artifactDir =
   argument('--artifact-dir') ?? process.env.ORCAD_E2E_ARTIFACT_DIR ?? join(root, 'out', 'orcad')
 const orcadEntry = join(artifactDir, 'orcad.js')
 const cliEntry = process.env.ORCAD_E2E_CLI_ENTRY ?? join(root, 'out', 'cli', 'index.js')
-const bundledBun = join(artifactDir, ORCAD_BUN_RUNTIME_FILENAME)
+const bundledBun = join(artifactDir, orcadBunRuntimeFilename(process.platform))
 const bun = process.env.BUN_EXECUTABLE ?? (existsSync(bundledBun) ? bundledBun : 'bun')
 const cliRuntime = process.env.ORCAD_E2E_CLI_RUNTIME ?? process.execPath
 const hostNodeRuntime = process.env.ORCA_BUN_SCRIPT_HOST_NODE ?? process.execPath

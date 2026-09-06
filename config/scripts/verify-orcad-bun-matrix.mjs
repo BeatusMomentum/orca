@@ -5,7 +5,8 @@ import { createReadStream, existsSync, readFileSync, readdirSync, statSync } fro
 import { join, relative, resolve, sep } from 'node:path'
 import {
   ORCAD_BUILD_TARGET_FILENAME,
-  ORCAD_BUN_RUNTIME_FILENAME,
+  orcadBunRuntimeFilename,
+  orcadArtifactHashPrefix,
   ORCAD_VERSION,
   ORCAD_VERSION_FILENAME,
   orcadArtifactFilenames
@@ -25,8 +26,9 @@ export async function verifyOrcadBunMatrix(matrixRoot) {
 }
 
 export async function computeOrcadArtifactVersion(artifactDir, browserName) {
-  const hash = createHash('sha256')
-  for (const filename of orcadArtifactFilenames()) {
+  const target = readFileSync(join(artifactDir, ORCAD_BUILD_TARGET_FILENAME), 'utf8').trim()
+  const hash = createHash('sha256').update(orcadArtifactHashPrefix(target))
+  for (const filename of orcadArtifactFilenames(target)) {
     await hashFileInto(hash, join(artifactDir, filename))
   }
   if (browserName) {
@@ -53,7 +55,7 @@ async function verifyTarget(matrixRoot, target) {
   const sourceBrowser = join(root, 'node_modules', 'agent-browser', 'bin', browserName)
   const expectedBrowserName = existsSync(sourceBrowser) ? browserName : null
   const expectedFiles = new Set([
-    ...orcadArtifactFilenames(),
+    ...orcadArtifactFilenames(target),
     ORCAD_VERSION_FILENAME,
     ...(expectedBrowserName ? [expectedBrowserName] : [])
   ])
@@ -83,7 +85,7 @@ async function verifyTarget(matrixRoot, target) {
       `${target} version mismatch: recorded=${version} recomputed=${recomputedVersion}`
     )
   }
-  const runtimePath = join(artifactDir, ORCAD_BUN_RUNTIME_FILENAME)
+  const runtimePath = join(artifactDir, orcadBunRuntimeFilename(target))
   const runtimeSha256 = await fileSha256(runtimePath)
   if (runtimeSha256 !== ORCAD_BUN_RELEASE_ASSETS[target].executableSha256) {
     throw new Error(`${target} Bun runtime checksum mismatch`)

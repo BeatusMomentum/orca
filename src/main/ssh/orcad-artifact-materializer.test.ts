@@ -1,16 +1,18 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { mkdtempSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   ORCAD_BUILD_TARGET_FILENAME,
+  ORCAD_EMOJI_SHORTCODE_DATASET,
   ORCAD_TEMPLATE_MANIFEST_FILENAME,
   ORCAD_TEMPLATE_TARGETS_DIR,
   ORCAD_VERSION_FILENAME,
   orcadArtifactFilenames
 } from '../../shared/orcad-artifacts'
+import type { OrcadBunTarget } from '../../shared/orcad-bun-runtime'
 import { assembleOrcadArtifact } from './orcad-artifact-materializer'
 
 const TARGET = 'linux-x64-glibc' as const
@@ -31,7 +33,7 @@ function write(path: string, contents: string): void {
   writeFileSync(path, contents)
 }
 
-function createTemplate(): {
+function createTemplate(target: OrcadBunTarget = TARGET): {
   root: string
   templateDir: string
   cacheRoot: string
@@ -46,13 +48,14 @@ function createTemplate(): {
     'orcad.js': 'orcad-entry',
     'daemon-entry.js': 'daemon-entry',
     'parcel-watcher-process-entry.js': 'watcher-process',
-    'node_modules/@parcel/watcher/index.js': 'watcher-wrapper'
+    'node_modules/@parcel/watcher/index.js': 'watcher-wrapper',
+    [ORCAD_EMOJI_SHORTCODE_DATASET]: '{}'
   }
   for (const [filename, contents] of Object.entries(common)) {
     write(join(templateDir, filename), contents)
   }
-  const targetDir = join(templateDir, ORCAD_TEMPLATE_TARGETS_DIR, TARGET)
-  write(join(targetDir, ORCAD_BUILD_TARGET_FILENAME), `${TARGET}\n`)
+  const targetDir = join(templateDir, ORCAD_TEMPLATE_TARGETS_DIR, target)
+  write(join(targetDir, ORCAD_BUILD_TARGET_FILENAME), `${target}\n`)
   write(join(targetDir, 'watcher.node'), 'native-watcher')
   write(join(targetDir, 'agent-browser-linux-x64'), 'browser')
   write(runtimePath, 'bun-executable')
@@ -64,7 +67,7 @@ function createTemplate(): {
         Object.keys(common).map((filename) => [filename, sha256(join(templateDir, filename))])
       ),
       targets: {
-        [TARGET]: {
+        [target]: {
           targetSha256: sha256(join(targetDir, ORCAD_BUILD_TARGET_FILENAME)),
           watcherSha256: sha256(join(targetDir, 'watcher.node')),
           browserName: 'agent-browser-linux-x64',
@@ -77,6 +80,27 @@ function createTemplate(): {
 }
 
 describe('assembleOrcadArtifact', () => {
+  it('gives Windows executable naming a new immutable slot identity', async () => {
+    const target = 'win32-x64' as const
+    const fixture = createTemplate(target)
+    const artifactDir = await assembleOrcadArtifact({ ...fixture, target })
+    expect(readFileSync(join(artifactDir, 'bun-runtime.exe'), 'utf8')).toBe('bun-executable')
+    expect(existsSync(join(artifactDir, 'bun-runtime'))).toBe(false)
+    const oldHash = createHash('sha256')
+    for (const filename of orcadArtifactFilenames(target)) {
+      oldHash.update(readFileSync(join(artifactDir, filename)))
+    }
+    oldHash.update('browser')
+    const oldVersion = `0.1.0+${oldHash.digest('hex').slice(0, 12)}`
+    const oldDir = join(fixture.cacheRoot, target, oldVersion)
+    write(join(oldDir, 'bun-runtime'), 'legacy-slot-must-stay-unchanged')
+    expect(artifactDir).not.toBe(oldDir)
+    await expect(assembleOrcadArtifact({ ...fixture, target })).resolves.toBe(artifactDir)
+    expect(readFileSync(join(oldDir, 'bun-runtime'), 'utf8')).toBe(
+      'legacy-slot-must-stay-unchanged'
+    )
+  })
+
   it('assembles a complete content-addressed target directory', async () => {
     const fixture = createTemplate()
     const artifactDir = await assembleOrcadArtifact({

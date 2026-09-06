@@ -7,13 +7,13 @@ import { ORCAD_BUN_RUNTIME_FILENAME } from '../../shared/orcad-artifacts'
 import { ORCAD_BUN_RELEASE_ASSETS } from '../../shared/orcad-bun-runtime'
 import { materializeCachedOrcadBunRuntime } from './orcad-bun-runtime-materializer'
 
-const extraction = vi.hoisted(() => ({ executable: new Uint8Array() }))
+const extraction = vi.hoisted(() => ({ executable: new Uint8Array(), executableName: 'bun' }))
 
 vi.mock('extract-zip', () => ({
   default: vi.fn(async (_archive: string, options: { dir: string }) => {
     const extracted = join(options.dir, 'bun-linux-x64')
     await mkdir(extracted, { recursive: true })
-    await writeFile(join(extracted, 'bun'), extraction.executable)
+    await writeFile(join(extracted, extraction.executableName), extraction.executable)
   })
 }))
 
@@ -36,6 +36,7 @@ function responseFetcher(body: Uint8Array, declaredLength = body.byteLength): ty
 }
 
 beforeEach(async () => {
+  extraction.executableName = 'bun'
   cacheRoot = await mkdtemp(join(tmpdir(), 'orca-bun-runtime-materializer-'))
   Object.assign(ORCAD_BUN_RELEASE_ASSETS[TARGET], originalAsset)
 })
@@ -46,6 +47,32 @@ afterEach(async () => {
 })
 
 describe('materializeCachedOrcadBunRuntime', () => {
+  it('caches Windows PE files as .exe without renaming a legacy cache entry', async () => {
+    const target = 'win32-x64' as const
+    const savedAsset = { ...ORCAD_BUN_RELEASE_ASSETS[target] }
+    const archive = new TextEncoder().encode('windows archive')
+    const executable = new TextEncoder().encode('windows executable')
+    extraction.executable = executable
+    extraction.executableName = 'bun.exe'
+    Object.assign(ORCAD_BUN_RELEASE_ASSETS[target], {
+      sha256: sha256(archive),
+      executableSha256: sha256(executable)
+    })
+    const runtimeDir = join(cacheRoot, 'bun', 'v1.4.0', target)
+    await mkdir(runtimeDir, { recursive: true })
+    await writeFile(join(runtimeDir, 'bun-runtime'), 'legacy')
+    try {
+      const runtimePath = await materializeCachedOrcadBunRuntime(target, cacheRoot, {
+        fetcher: responseFetcher(archive)
+      })
+      expect(runtimePath).toBe(join(runtimeDir, 'bun-runtime.exe'))
+      expect(await readFile(runtimePath)).toEqual(Buffer.from(executable))
+      expect(await readFile(join(runtimeDir, 'bun-runtime'), 'utf8')).toBe('legacy')
+    } finally {
+      Object.assign(ORCAD_BUN_RELEASE_ASSETS[target], savedAsset)
+    }
+  })
+
   it('reuses a checksum-valid cached runtime without fetching', async () => {
     const runtime = new TextEncoder().encode('cached bun')
     ORCAD_BUN_RELEASE_ASSETS[TARGET].executableSha256 = sha256(runtime)

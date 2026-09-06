@@ -14,6 +14,7 @@ import {
 import { dirname, join, resolve } from 'node:path'
 import {
   ORCAD_BUILD_TARGET_FILENAME,
+  ORCAD_EMOJI_SHORTCODE_DATASET,
   ORCAD_PARCEL_WATCHER_ENTRY,
   ORCAD_TEMPLATE_MANIFEST_FILENAME,
   ORCAD_TEMPLATE_TARGETS_DIR
@@ -29,7 +30,8 @@ const commonArtifacts = [
   'orcad.js',
   'daemon-entry.js',
   'parcel-watcher-process-entry.js',
-  ORCAD_PARCEL_WATCHER_ENTRY
+  ORCAD_PARCEL_WATCHER_ENTRY,
+  ORCAD_EMOJI_SHORTCODE_DATASET
 ]
 
 function copy(source, destination, executable = false) {

@@ -53,6 +53,7 @@ export type RelayArtifact = {
 export const RELAY_WINDOWS_PROCESS_TREE_FILENAME = 'windows-process-tree.node'
 /** Optional target-native Bun executable. Node remains the rollback/compatibility path. */
 export const RELAY_BUN_RUNTIME_FILENAME = 'bun-runtime'
+export const RELAY_WINDOWS_BUN_RUNTIME_FILENAME = 'bun-runtime.exe'
 /** Marker written only by strict release bundles that must not use host Node. */
 export const RELAY_BUN_REQUIRED_FILENAME = '.bun-required'
 /** Optional Linux Bun executable linked against glibc. */
@@ -68,6 +69,9 @@ export const RELAY_WATCHER_NATIVE = 'node_modules/@parcel/watcher/native-native/
 
 /** Map an orcad/relay target to the staged Bun filename used by its package. */
 export function relayBunRuntimeFilename(target: string): string {
+  if (target === 'win32' || isWindowsRelayPlatform(target)) {
+    return RELAY_WINDOWS_BUN_RUNTIME_FILENAME
+  }
   if (target.endsWith('-glibc')) {
     return RELAY_BUN_GLIBC_RUNTIME_FILENAME
   }
@@ -104,9 +108,10 @@ export const RELAY_ARTIFACTS: readonly RelayArtifact[] = [
   {
     filename: RELAY_BUN_RUNTIME_FILENAME,
     optional: true,
-    platforms: NON_LINUX_RELAY_PLATFORMS,
+    platforms: ['darwin-x64', 'darwin-arm64'],
     legacyOnly: true
   },
+  { filename: RELAY_WINDOWS_BUN_RUNTIME_FILENAME, optional: true, windowsOnly: true },
   { filename: RELAY_BUN_GLIBC_RUNTIME_FILENAME, optional: true, platforms: LINUX_RELAY_PLATFORMS },
   { filename: RELAY_BUN_MUSL_RUNTIME_FILENAME, optional: true, platforms: LINUX_RELAY_PLATFORMS },
   { filename: RELAY_BUN_REQUIRED_FILENAME, optional: true },

@@ -34,6 +34,8 @@ const ORCAD_DIRS = [
 
 describe('remote install namespace', () => {
   it('requires the self-contained Bun runtime and watcher in every orcad slot', () => {
+    expect(ORCAD_INSTALL_MODEL.requiredArtifacts(true)).toContain('bun-runtime.exe')
+    expect(ORCAD_INSTALL_MODEL.requiredArtifacts(true)).not.toContain('bun-runtime')
     expect(ORCAD_INSTALL_MODEL.requiredArtifacts(false)).toEqual(
       expect.arrayContaining([
         ORCAD_BUILD_TARGET_FILENAME,

@@ -3,7 +3,7 @@ import { createReadStream, readdirSync } from 'node:fs'
 import { chmod, copyFile, mkdir, open, rename, rm } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import extractZip from 'extract-zip'
-import { ORCAD_BUN_RUNTIME_FILENAME } from '../../shared/orcad-artifacts'
+import { orcadBunRuntimeFilename } from '../../shared/orcad-artifacts'
 import {
   ORCAD_BUN_RELEASE_ASSETS,
   ORCAD_BUN_VERSION,
@@ -25,7 +25,7 @@ export async function materializeCachedOrcadBunRuntime(
 ): Promise<string> {
   const asset = ORCAD_BUN_RELEASE_ASSETS[target]
   const runtimeDir = join(cacheRoot, 'bun', `v${ORCAD_BUN_VERSION}`, target)
-  const runtimePath = join(runtimeDir, ORCAD_BUN_RUNTIME_FILENAME)
+  const runtimePath = join(runtimeDir, orcadBunRuntimeFilename(target))
   await mkdir(runtimeDir, { recursive: true })
   if ((await fileSha256(runtimePath)) === asset.executableSha256) {
     return runtimePath

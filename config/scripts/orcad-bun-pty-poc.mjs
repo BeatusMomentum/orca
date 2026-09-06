@@ -17,11 +17,16 @@ const RESIZED_ROWS = 31
 const options = parseOrcadBunSoakOptions(process.argv.slice(2))
 
 const childSource = String.raw`
+function dimensions() {
+  const stream = process.platform === 'win32'
+    ? new (require('node:tty').WriteStream)(1)
+    : process.stdout
+  return { columns: stream.columns, rows: stream.rows }
+}
 process.stdout.write(JSON.stringify({
   kind: 'ready',
   isTTY: process.stdout.isTTY === true,
-  columns: process.stdout.columns,
-  rows: process.stdout.rows
+  ...dimensions()
 }) + '\n')
 process.stdin.setEncoding('utf8')
 process.stdin.once('data', (data) => {
@@ -29,8 +34,7 @@ process.stdin.once('data', (data) => {
     process.stdout.write(JSON.stringify({
       kind: 'ack',
       input: data.trim(),
-      columns: process.stdout.columns,
-      rows: process.stdout.rows
+      ...dimensions()
     }) + '\n')
     process.exit(0)
   }, 25)
@@ -52,7 +56,8 @@ async function verifyPtyRoundTrip(cycle) {
         if (!inputSent && output.includes('"kind":"ready"')) {
           inputSent = true
           terminal.resize(RESIZED_COLS, RESIZED_ROWS)
-          terminal.write(`${marker}\n`)
+          // ConPTY's cooked input requires an Enter key, not a line feed.
+          terminal.write(`${marker}\r`)
         }
       }
     }

@@ -40,7 +40,9 @@ function loadDatabaseSync(): typeof DatabaseSync {
     return nodeSqlite.DatabaseSync
   }
 
-  type BunDatabase = Pick<DatabaseSync, 'close' | 'exec' | 'prepare'>
+  type BunDatabase = Pick<DatabaseSync, 'exec' | 'prepare'> & {
+    close(throwOnError?: boolean): void
+  }
   type BunDatabaseConstructor = new (
     path: SqlitePath,
     options: { readonly?: boolean; strict: boolean }
@@ -75,7 +77,8 @@ function loadDatabaseSync(): typeof DatabaseSync {
     }
 
     close(): void {
-      this.database.close()
+      // Surface an incomplete close instead of leaving a Windows database handle locked.
+      this.database.close(true)
     }
   } as unknown as typeof DatabaseSync
 }

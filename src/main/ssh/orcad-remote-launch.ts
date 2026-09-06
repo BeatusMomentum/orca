@@ -20,7 +20,7 @@ import {
   posixProcessAliveShellFunction
 } from './orcad-remote-host-support'
 import type { ServeReadiness } from '../server/serve-readiness'
-import { ORCAD_BUN_RUNTIME_FILENAME } from '../../shared/orcad-artifacts'
+import { ORCAD_BUN_RUNTIME_FILENAME, orcadBunRuntimeFilename } from '../../shared/orcad-artifacts'
 import { ORCAD_BUN_TARGETS } from '../../shared/orcad-bun-runtime'
 import { ORCAD_STOP_REQUEST_FILENAME } from '../../shared/orcad-stop-request'
 import { quoteWindowsArgument } from '../../shared/child-process/windows-command-line'
@@ -71,7 +71,7 @@ export function orcadLaunchCommand(host: RemoteHostPlatform, spec: OrcadLaunchSp
   )
   const entry = shellEscape(joinRemotePath(host, spec.remoteInstallDir, 'orcad.js'))
   const bundledRuntime = shellEscape(
-    joinRemotePath(host, spec.remoteInstallDir, ORCAD_BUN_RUNTIME_FILENAME)
+    joinRemotePath(host, spec.remoteInstallDir, orcadBunRuntimeFilename(host.os))
   )
   return [
     `cd ${dir} &&`,
@@ -94,7 +94,8 @@ export function orcadLaunchCommand(host: RemoteHostPlatform, spec: OrcadLaunchSp
 }
 
 function windowsOrcadLaunchCommand(host: RemoteHostPlatform, spec: OrcadLaunchSpec): string {
-  const runtime = joinRemotePath(host, spec.remoteInstallDir, ORCAD_BUN_RUNTIME_FILENAME)
+  const runtime = joinRemotePath(host, spec.remoteInstallDir, orcadBunRuntimeFilename(host.os))
+  const legacyRuntime = joinRemotePath(host, spec.remoteInstallDir, ORCAD_BUN_RUNTIME_FILENAME)
   const entry = joinRemotePath(host, spec.remoteInstallDir, 'orcad.js')
   const readiness = joinRemotePath(host, spec.remoteInstallDir, ORCAD_READINESS_FILENAME)
   const log = joinRemotePath(host, spec.remoteInstallDir, ORCAD_LOG_FILENAME)
@@ -110,6 +111,7 @@ function windowsOrcadLaunchCommand(host: RemoteHostPlatform, spec: OrcadLaunchSp
   return powerShellCommand(
     [
       `$runtime = ${powerShellLiteral(runtime)}`,
+      `if (-not (Test-Path -LiteralPath $runtime -PathType Leaf) -and (Test-Path -LiteralPath ${powerShellLiteral(legacyRuntime)})) { Write-Error 'orcad: extensionless Windows Bun slot must be rebuilt'; exit 78 }`,
       `if (-not (Test-Path -LiteralPath $runtime -PathType Leaf)) { ${fallback} }`,
       `Remove-Item -LiteralPath ${powerShellLiteral(stopRequest)} -Force -ErrorAction SilentlyContinue`,
       `[IO.File]::WriteAllText(${powerShellLiteral(readiness)}, '')`,

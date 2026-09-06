@@ -28,7 +28,7 @@ import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import process from 'node:process'
-import { ORCAD_BUN_RUNTIME_FILENAME } from '../../src/shared/orcad-artifacts.ts'
+import { orcadBunRuntimeFilename } from '../../src/shared/orcad-artifacts.ts'
 
 const projectDir = resolve(import.meta.dirname, '../..')
 const serveEntry = join(projectDir, 'out', 'main', 'index.js')
@@ -190,7 +190,7 @@ function resolveLaunch(userDataDir) {
       label: `orcad/${runtime} (${ORCAD_ENTRY})`,
       command:
         runtime === 'bundled-bun'
-          ? join(dirname(ORCAD_ENTRY), ORCAD_BUN_RUNTIME_FILENAME)
+          ? join(dirname(ORCAD_ENTRY), orcadBunRuntimeFilename(process.platform))
           : runtime === 'bun'
             ? (process.env.BUN_EXECUTABLE ?? 'bun')
             : process.execPath,

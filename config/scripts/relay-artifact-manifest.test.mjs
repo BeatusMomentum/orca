@@ -4,6 +4,7 @@
 // this gap, because the WSL transcript dispatcher runs in-process under vitest
 // and never forks.
 import { execFileSync } from 'node:child_process'
+import { orcadBunRuntimeFilename } from '../../src/shared/orcad-artifacts.ts'
 import { createHash } from 'node:crypto'
 import {
   existsSync,
@@ -37,7 +38,7 @@ for (const platform of RELAY_BUILD_PLATFORMS) {
   for (const target of targets) {
     const platformDir = join(bunRuntimeRoot, target)
     mkdirSync(platformDir, { recursive: true })
-    writeFileSync(join(platformDir, 'bun-runtime'), `bun-runtime-${target}`)
+    writeFileSync(join(platformDir, orcadBunRuntimeFilename(target)), `bun-runtime-${target}`)
   }
 }
 
@@ -108,6 +109,9 @@ describe('packaged relay artifact manifest', () => {
       )
     ]
     for (const filename of files) {
+      if (filename === 'bun-runtime.exe') {
+        hash.update(`${filename}\0`)
+      }
       hash.update(readFileSync(join(outDir, filename)))
     }
     const version = readFileSync(join(outDir, RELAY_VERSION_FILENAME), 'utf8')

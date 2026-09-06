@@ -7,6 +7,8 @@ import { getAppEnvironment } from '../../shared/app-environment'
 import {
   ORCAD_BUILD_TARGET_FILENAME,
   ORCAD_BUN_RUNTIME_FILENAME,
+  orcadBunRuntimeFilename,
+  orcadArtifactHashPrefix,
   ORCAD_TEMPLATE_MANIFEST_FILENAME,
   ORCAD_TEMPLATE_TARGETS_DIR,
   ORCAD_VERSION,
@@ -92,7 +94,7 @@ export async function assembleOrcadArtifact(args: {
   const manifest = args.manifest ?? (await readTemplateManifest(args.templateDir))
   await verifyTemplate(args.templateDir, args.target, manifest)
   const sources = artifactSources(args.templateDir, args.target, args.runtimePath, manifest)
-  const { fullVersion, sourceHashes } = await computeArtifactIdentity(sources)
+  const { fullVersion, sourceHashes } = await computeArtifactIdentity(sources, args.target)
   const targetRoot = join(args.cacheRoot, args.target)
   const targetDir = join(targetRoot, fullVersion)
   if (await isCompleteArtifact(targetDir, fullVersion, sources, sourceHashes)) {
@@ -135,17 +137,17 @@ function artifactSources(
   if (!targetManifest) {
     throw new Error(`Packaged orcad template does not support ${target}`)
   }
-  const required = orcadArtifactFilenames().map((filename) => ({
+  const required = orcadArtifactFilenames(target).map((filename) => ({
     filename,
     path:
-      filename === ORCAD_BUN_RUNTIME_FILENAME
+      filename === orcadBunRuntimeFilename(target)
         ? runtimePath
         : filename === ORCAD_BUILD_TARGET_FILENAME
           ? join(targetDir, ORCAD_BUILD_TARGET_FILENAME)
           : filename.endsWith('watcher.node')
             ? join(targetDir, 'watcher.node')
             : join(templateDir, filename),
-    ...(filename === ORCAD_BUN_RUNTIME_FILENAME ? { executable: true } : {})
+    ...(filename === orcadBunRuntimeFilename(target) ? { executable: true } : {})
   }))
   if (!targetManifest.browserName) {
     return required
@@ -161,9 +163,10 @@ function artifactSources(
 }
 
 async function computeArtifactIdentity(
-  sources: { filename: string; path: string }[]
+  sources: { filename: string; path: string }[],
+  target: OrcadBunTarget
 ): Promise<{ fullVersion: string; sourceHashes: Map<string, string> }> {
-  const hash = createHash('sha256')
+  const hash = createHash('sha256').update(orcadArtifactHashPrefix(target))
   const sourceHashes = new Map<string, string>()
   for (const source of sources) {
     const sourceHash = createHash('sha256')

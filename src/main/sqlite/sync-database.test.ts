@@ -50,8 +50,8 @@ describe('SyncDatabase Bun compatibility', () => {
         constructorOptions = options
       }
 
-      close(): void {
-        bunDatabase.close()
+      close(throwOnError?: boolean): void {
+        bunDatabase.close(throwOnError)
       }
 
       exec(sql: string): void {
@@ -77,6 +77,7 @@ describe('SyncDatabase Bun compatibility', () => {
     expect(db.prepare('SELECT 1')).toBe(statement)
     db.close()
     expect(bunDatabase.close).toHaveBeenCalledOnce()
+    expect(bunDatabase.close).toHaveBeenCalledWith(true)
   })
 })
 

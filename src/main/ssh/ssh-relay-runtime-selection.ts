@@ -32,7 +32,7 @@ export function relayBundledBunPath(
   const filename =
     host.os === 'linux' && libc
       ? relayBunRuntimeFilename(`${host.os}-${host.arch}-${libc}`)
-      : RELAY_BUN_RUNTIME_FILENAME
+      : relayBunRuntimeFilename(host.os)
   return joinRemotePath(host, remoteDir, filename)
 }
 

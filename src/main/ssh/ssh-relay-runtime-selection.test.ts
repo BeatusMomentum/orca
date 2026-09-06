@@ -69,9 +69,9 @@ describe('relay runtime selection', () => {
       'C:/Program Files/nodejs/node.exe'
     )
 
-    expect(path).toBe('C:/Users/me/.orca-remote/relay-v1/bun-runtime')
+    expect(path).toBe('C:/Users/me/.orca-remote/relay-v1/bun-runtime.exe')
     expect(selection).toContain("$runtime = 'C:/Program Files/nodejs/node.exe'")
-    expect(selection).toContain("$bundledBun = 'C:/Users/me/.orca-remote/relay-v1/bun-runtime'")
+    expect(selection).toContain("$bundledBun = 'C:/Users/me/.orca-remote/relay-v1/bun-runtime.exe'")
     expect(selection).toContain('Test-Path -LiteralPath $bundledBun -PathType Leaf')
     expect(selection).toContain("$bunVersion -eq '1.4.0'")
     expect(selection).toContain('$runtime = $bundledBun')

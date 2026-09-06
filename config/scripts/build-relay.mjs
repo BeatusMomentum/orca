@@ -9,6 +9,7 @@
  * degraded.
  */
 import { build } from 'esbuild'
+import { orcadBunRuntimeFilename } from '../../src/shared/orcad-artifacts.ts'
 import { createHash } from 'node:crypto'
 import {
   chmodSync,
@@ -25,6 +26,8 @@ import { createRequire } from 'node:module'
 import {
   RELAY_BUILD_PLATFORMS,
   RELAY_BUN_RUNTIME_FILENAME,
+  RELAY_WINDOWS_BUN_RUNTIME_FILENAME,
+  relayBunRuntimeFilename,
   RELAY_BUN_GLIBC_RUNTIME_FILENAME,
   RELAY_BUN_MUSL_RUNTIME_FILENAME,
   RELAY_BUN_REQUIRED_FILENAME,
@@ -115,25 +118,29 @@ function stageRelayBunRuntime(platform, outDir) {
         { target: `${platform}-glibc`, filename: RELAY_BUN_GLIBC_RUNTIME_FILENAME },
         { target: `${platform}-musl`, filename: RELAY_BUN_MUSL_RUNTIME_FILENAME }
       ]
-    : [{ target: platform, filename: RELAY_BUN_RUNTIME_FILENAME }]
+    : [{ target: platform, filename: relayBunRuntimeFilename(platform) }]
   // Build output directories are reused by local and release builds. Remove
   // an older companion before deciding whether this build may ship one.
   for (const { filename } of runtimes) {
     rmSync(join(outDir, filename), { force: true })
   }
+  if (isWindowsRelayPlatform(platform)) {
+    rmSync(join(outDir, RELAY_BUN_RUNTIME_FILENAME), { force: true })
+  }
   const missing = runtimes.filter(
-    ({ target }) => !existsSync(join(RELAY_BUN_RUNTIME_ROOT, target, 'bun-runtime'))
+    ({ target }) =>
+      !existsSync(join(RELAY_BUN_RUNTIME_ROOT, target, orcadBunRuntimeFilename(target)))
   )
   if (missing.length > 0 && REQUIRE_RELAY_BUN_RUNTIME) {
     const paths = missing
-      .map(({ target }) => join(RELAY_BUN_RUNTIME_ROOT, target, 'bun-runtime'))
+      .map(({ target }) => join(RELAY_BUN_RUNTIME_ROOT, target, orcadBunRuntimeFilename(target)))
       .join(', ')
     throw new Error(
       `Relay ${platform} needs bundled Bun runtimes: ${paths}. Materialize the target-native Bun matrix or unset ORCA_REQUIRE_RELAY_BUN_RUNTIME.`
     )
   }
   for (const { target, filename } of runtimes) {
-    const source = join(RELAY_BUN_RUNTIME_ROOT, target, 'bun-runtime')
+    const source = join(RELAY_BUN_RUNTIME_ROOT, target, orcadBunRuntimeFilename(target))
     if (!existsSync(source)) {
       console.log(`Relay ${platform}: no ${filename}; Node fallback remains active.`)
       continue
@@ -179,7 +186,7 @@ function stageWslBunRuntimes(outDir) {
   for (const arch of ['x64', 'arm64']) {
     for (const libc of ['glibc', 'musl']) {
       const target = `linux-${arch}-${libc}`
-      const source = join(RELAY_BUN_RUNTIME_ROOT, target, 'bun-runtime')
+      const source = join(RELAY_BUN_RUNTIME_ROOT, target, orcadBunRuntimeFilename(target))
       if (!existsSync(source)) {
         if (REQUIRE_RELAY_BUN_RUNTIME) {
           throw new Error(`WSL relay needs bundled Bun runtime: ${source}`)
@@ -424,6 +431,9 @@ for (const platform of RELAY_BUILD_PLATFORMS) {
   for (const filename of relayOptionalArtifactFilenames(platform)) {
     const artifactPath = join(outDir, filename)
     if (existsSync(artifactPath)) {
+      if (filename === RELAY_WINDOWS_BUN_RUNTIME_FILENAME) {
+        hash.update(`${filename}\0`)
+      }
       hash.update(readFileSync(artifactPath))
     }
   }

@@ -103,7 +103,9 @@ describe('orcadLaunchCommand', () => {
   it('launches the bundled runtime detached on Windows', () => {
     const script = decodePowerShellCommand(orcadLaunchCommand(windows, SPEC))
     expect(script).toContain('Start-Process')
-    expect(script).toContain('bun-runtime')
+    expect(script).toContain("bun-runtime.exe'")
+    expect(script).toContain('extensionless Windows Bun slot must be rebuilt')
+    expect(script).not.toContain('Copy-Item')
     expect(script).toContain('RedirectStandardOutput')
     expect(script).toContain('.orcad-pid')
     expect(script).not.toContain(SPEC.nodePath)

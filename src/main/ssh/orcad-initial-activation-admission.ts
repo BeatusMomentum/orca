@@ -1,5 +1,5 @@
 import { ORCAD_LOCK_FILE_NAME } from '../orcad/orcad-instance-lock'
-import { ORCAD_BUN_RUNTIME_FILENAME } from '../../shared/orcad-artifacts'
+import { orcadBunRuntimeFilename } from '../../shared/orcad-artifacts'
 import { PRIMARY_RUNTIME_METADATA_FILE } from '../../shared/runtime-bootstrap'
 import { shellEscape } from './ssh-connection-utils'
 import { assertPosixOrcadHost } from './orcad-remote-host-support'
@@ -49,7 +49,7 @@ export function initialOrcadActivationAdmissionCommand(
   }
 
   assertPosixOrcadHost(host)
-  const runtime = joinRemotePath(host, remoteInstallDir, ORCAD_BUN_RUNTIME_FILENAME)
+  const runtime = joinRemotePath(host, remoteInstallDir, orcadBunRuntimeFilename(host.os))
   const script = [
     'const fs=require("node:fs");',
     `const limit=${OWNER_RECORD_MAX_BYTES};`,

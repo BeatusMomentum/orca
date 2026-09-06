@@ -14,7 +14,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
-import { ORCAD_BUN_RUNTIME_FILENAME } from '../../src/shared/orcad-artifacts.ts'
+import { orcadBunRuntimeFilename } from '../../src/shared/orcad-artifacts.ts'
 import {
   ORCAD_BUN_RELEASE_ASSETS,
   ORCAD_BUN_VERSION,
@@ -105,7 +105,7 @@ async function materializeRuntime(target, outputPath) {
   if (!asset) {
     throw new Error(`Unsupported Bun target: ${target}`)
   }
-  const cached = join(cacheRoot, target, ORCAD_BUN_RUNTIME_FILENAME)
+  const cached = join(cacheRoot, target, orcadBunRuntimeFilename(target))
   if (existsSync(cached) && sha256(cached) !== asset.executableSha256) {
     rmSync(cached, { force: true })
   }
@@ -149,10 +149,10 @@ async function materializeRuntime(target, outputPath) {
 async function main() {
   const target = argument('--target') ?? currentTarget()
   const outputDir = argument('--out-dir')
-  const cachedRuntimePath = join(cacheRoot, target, ORCAD_BUN_RUNTIME_FILENAME)
+  const cachedRuntimePath = join(cacheRoot, target, orcadBunRuntimeFilename(target))
   const runtimePath =
     process.argv.includes('--runtime-only') && outputDir
-      ? join(resolve(outputDir), ORCAD_BUN_RUNTIME_FILENAME)
+      ? join(resolve(outputDir), orcadBunRuntimeFilename(target))
       : cachedRuntimePath
   await materializeRuntime(target, runtimePath)
 

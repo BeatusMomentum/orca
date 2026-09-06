@@ -17,19 +17,33 @@ afterEach(() => {
   }
 })
 
-function fixture() {
+function fixture(target = '') {
   const dir = mkdtempSync(join(tmpdir(), 'orcad-matrix-version-'))
   temporaryDirectories.push(dir)
-  for (const filename of orcadArtifactFilenames()) {
+  for (const filename of orcadArtifactFilenames(target)) {
     const path = join(dir, filename)
     mkdirSync(dirname(path), { recursive: true })
     writeFileSync(path, filename)
   }
   writeFileSync(join(dir, 'agent-browser-test'), 'browser')
+  if (target) {
+    writeFileSync(join(dir, '.build-target'), target)
+  }
   return dir
 }
 
 describe('orcad Bun matrix verification', () => {
+  it('hashes the Windows executable layout distinctly from an extensionless slot', async () => {
+    const dir = fixture('win32-x64')
+    const hash = createHash('sha256').update('bun-runtime.exe\0')
+    for (const filename of orcadArtifactFilenames('win32-x64')) {
+      hash.update(filename === '.build-target' ? 'win32-x64' : filename)
+    }
+    hash.update('browser')
+    await expect(computeOrcadArtifactVersion(dir, 'agent-browser-test')).resolves.toBe(
+      `0.1.0+${hash.digest('hex').slice(0, 12)}`
+    )
+  })
   it('recomputes the build content version in the declared artifact order', async () => {
     const dir = fixture()
     const hash = createHash('sha256')

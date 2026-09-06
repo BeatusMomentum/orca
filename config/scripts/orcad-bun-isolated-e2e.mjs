@@ -3,7 +3,7 @@
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { ORCAD_BUN_RUNTIME_FILENAME } from '../../src/shared/orcad-artifacts.ts'
+import { orcadBunRuntimeFilename } from '../../src/shared/orcad-artifacts.ts'
 import { runProcessSync, spawnProcess } from './script-child-process.mjs'
 
 const root = resolve(import.meta.dirname, '../..')
@@ -14,7 +14,7 @@ function verifyWatcher() {
   const watched = join(temporary, 'watched')
   mkdirSync(watched)
   const child = spawnProcess({
-    program: join(artifact, ORCAD_BUN_RUNTIME_FILENAME),
+    program: join(artifact, orcadBunRuntimeFilename(process.platform)),
     args: [join(artifact, 'parcel-watcher-process-entry.js')],
     cwd: temporary,
     stdio: ['ignore', 'ignore', 'pipe', 'ipc']

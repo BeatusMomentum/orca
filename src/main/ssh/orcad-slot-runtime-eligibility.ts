@@ -1,4 +1,4 @@
-import { ORCAD_BUN_RUNTIME_FILENAME } from '../../shared/orcad-artifacts'
+import { ORCAD_BUN_RUNTIME_FILENAME, orcadBunRuntimeFilename } from '../../shared/orcad-artifacts'
 import type { SshConnection } from './ssh-connection'
 import { shellEscape } from './ssh-connection-utils'
 import { execCommand } from './ssh-relay-deploy-helpers'
@@ -44,11 +44,13 @@ export function probeOrcadSlotRuntimeCommand(
   host: RemoteHostPlatform,
   remoteInstallDir: string
 ): string {
-  const runtime = joinRemotePath(host, remoteInstallDir, ORCAD_BUN_RUNTIME_FILENAME)
+  const runtime = joinRemotePath(host, remoteInstallDir, orcadBunRuntimeFilename(host.os))
   const entry = joinRemotePath(host, remoteInstallDir, 'orcad.js')
   if (isWindowsRemoteHost(host)) {
+    const legacyRuntime = joinRemotePath(host, remoteInstallDir, ORCAD_BUN_RUNTIME_FILENAME)
     return powerShellCommand(
       `if (Test-Path -LiteralPath ${powerShellLiteral(runtime)} -PathType Leaf) { 'BUN' } ` +
+        `elseif (Test-Path -LiteralPath ${powerShellLiteral(legacyRuntime)}) { 'INCOMPLETE' } ` +
         `elseif (Test-Path -LiteralPath ${powerShellLiteral(entry)} -PathType Leaf) { 'LEGACY_NODE' } ` +
         `else { 'INCOMPLETE' }`
     )

@@ -38,6 +38,10 @@ describe('orcad slot runtime eligibility', () => {
       )
     )
 
+    expect(command).toContain("bun-runtime.exe' -PathType Leaf) { 'BUN' }")
+    expect(command).toContain("bun-runtime') { 'INCOMPLETE' }")
+    expect(command).not.toContain('Copy-Item')
+    expect(command).not.toContain('Move-Item')
     expect(command).toContain('Test-Path -LiteralPath')
     expect(command).toContain('LEGACY_NODE')
     expect(command).toContain('INCOMPLETE')

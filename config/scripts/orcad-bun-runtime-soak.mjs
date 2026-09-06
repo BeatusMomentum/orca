@@ -2,12 +2,13 @@
 
 import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { ORCAD_BUN_RUNTIME_FILENAME } from '../../src/shared/orcad-artifacts.ts'
+import { orcadBunRuntimeFilename } from '../../src/shared/orcad-artifacts.ts'
 import { parseOrcadBunSoakOptions } from './orcad-bun-soak-budget.mjs'
 import { runProcessSync } from './script-child-process.mjs'
 
 const root = resolve(import.meta.dirname, '../..')
-const runtime = join(root, 'out', 'orcad', ORCAD_BUN_RUNTIME_FILENAME)
+const runtimeFilename = orcadBunRuntimeFilename(process.platform)
+const runtime = join(root, 'out', 'orcad', runtimeFilename)
 const options = parseOrcadBunSoakOptions(process.argv.slice(2), {
   ...process.env,
   ORCA_ORCAD_BUN_SOAK_CYCLES: process.env.ORCA_ORCAD_BUN_SOAK_CYCLES ?? '25'
@@ -42,7 +43,7 @@ for (const probe of probes) {
 process.stdout.write(
   `${JSON.stringify({
     ok: true,
-    runtime: ORCAD_BUN_RUNTIME_FILENAME,
+    runtime: runtimeFilename,
     cyclesPerProbe: options.cycles,
     totalCycles: options.cycles * probes.length,
     probes,

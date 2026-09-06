@@ -338,7 +338,7 @@ async function resolveRelayRuntimeCandidate(
   if (!strictBundle) {
     return { requiresBundledBun: false }
   }
-  const hasGenericBun = existsSync(join(localRelayDir, RELAY_BUN_RUNTIME_FILENAME))
+  const hasGenericBun = existsSync(join(localRelayDir, relayBunRuntimeFilename(hostPlatform.os)))
   const hasLibcSpecificBun =
     existsSync(join(localRelayDir, RELAY_BUN_GLIBC_RUNTIME_FILENAME)) ||
     existsSync(join(localRelayDir, RELAY_BUN_MUSL_RUNTIME_FILENAME))

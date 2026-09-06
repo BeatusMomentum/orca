@@ -2,11 +2,11 @@
 
 import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { ORCAD_BUN_RUNTIME_FILENAME } from '../../src/shared/orcad-artifacts.ts'
+import { orcadBunRuntimeFilename } from '../../src/shared/orcad-artifacts.ts'
 import { runProcessSync } from './script-child-process.mjs'
 
 const root = resolve(import.meta.dirname, '../..')
-const runtime = join(root, 'out', 'orcad', ORCAD_BUN_RUNTIME_FILENAME)
+const runtime = join(root, 'out', 'orcad', orcadBunRuntimeFilename(process.platform))
 const script = process.argv[2]
 
 if (!script) {
