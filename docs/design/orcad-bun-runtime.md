@@ -1,5 +1,12 @@
 # Bun-backed orcad
 
+September 6 integration evidence: updated against main `a567e33bf7d`, with startup and runtime
+wiring ported into main's extracted modules. Strict SSH/WSL release bundles build successfully.
+The macOS Bun restart and Node→Bun→Node lifecycle checks preserve PTYs and scrollback; the real
+Linux arm64 SSH lifecycle preserves a live PTY through managed update and rollback. Native watcher,
+SQLite, WebSocket resource bounds, and mixed-version terminal wire checks pass. This evidence covers
+the agreed managed switchover slice; the universal ownership-transfer mutation gate remains disabled.
+
 **Status:** the managed Bun runtime, managed Node→Bun upgrade path, and durable recovery for interrupted
 activation, rollback, and stop mutations are complete in this worktree. Overall release remains
 conditional on physical Windows execution, routed DNS/suspend and soak-promotion evidence, and

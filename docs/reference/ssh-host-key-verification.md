@@ -130,9 +130,9 @@ connect, training them to dismiss the one warning that matters.
 
 > **Corrected against a live client.** The premise above is wrong about OpenSSH, though the
 > conclusion survives. `check_key_in_hostkeys` is not type-scoped at all: ANY non-marker entry for
-> the host that is not byte-equal produces `HOST_CHANGED`. Verified on 127.0.0.1:2223 — known*hosts
+> the host that is not byte-equal produces `HOST_CHANGED`. Verified on 127.0.0.1:2223 — `known_hosts`
 > holding only `ssh-rsa` against an ed25519-only server prints `IDENTIFICATION HAS CHANGED` and
-> refuses. So ssh does not avoid the false alarm by scoping; it avoids the \_situation* via
+> refuses. So ssh does not avoid the false alarm by scoping; it avoids the _situation_ via
 > `order_hostkeyalgs`, and hard-fails when the situation arises anyway. Our split into `mismatch`
 > and `unknown-type-known-host` therefore only chooses the wording — both refuse, which is ssh's
 > action. What the ordering below buys us is what it buys ssh: the situation mostly never arises.
@@ -365,7 +365,7 @@ Fixed after review:
 3. **A refused key still walked the credential ladder.** ssh2 reports a denial as a generic auth
    failure, so we went on to prompt for the passphrase and hand it to the host we had just refused.
    Rejections are now a typed error recognised before any fallback.
-4. **Fail-closed nearly became fail-always.** "No readable known*hosts" counted a \_missing* file the
+4. **Fail-closed nearly became fail-always.** "No readable `known_hosts`" counted a _missing_ file the
    same as an unreadable one, so a profile that had never connected — everyone's first run — would
    have been refused, and the suite passed only because dev machines have a `known_hosts`.
 5. **Ephemeral runtimes were refused for a policy they cannot satisfy.** The carve-out sat below the

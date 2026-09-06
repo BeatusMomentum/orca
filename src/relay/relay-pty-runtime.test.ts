@@ -32,4 +32,3 @@ describe('relay PTY runtime selection', () => {
     await expect(loadRelayPtyRuntime({ skipNode: true })).resolves.toBeNull()
   })
 })
-

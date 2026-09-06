@@ -26,14 +26,26 @@ export function resizeSshPty(
 export async function shutdownSshPty(
   mux: SshChannelMultiplexer,
   relayPtyId: string,
-  opts: { immediate?: boolean; keepHistory?: boolean; timeoutMs?: number }
+  opts: {
+    immediate?: boolean
+    keepHistory?: boolean
+    timeoutMs?: number
+    expectedIncarnationId?: string
+    expectedOwnerClientInstanceId?: string
+  }
 ): Promise<void> {
   await mux.request(
     'pty.shutdown',
     {
       id: relayPtyId,
       immediate: opts.immediate ?? false,
-      keepHistory: opts.keepHistory ?? false
+      keepHistory: opts.keepHistory ?? false,
+      ...(opts.expectedIncarnationId === undefined
+        ? {}
+        : { expectedIncarnationId: opts.expectedIncarnationId }),
+      ...(opts.expectedOwnerClientInstanceId === undefined
+        ? {}
+        : { expectedOwnerClientInstanceId: opts.expectedOwnerClientInstanceId })
     },
     opts.timeoutMs === undefined ? undefined : { timeoutMs: opts.timeoutMs }
   )
@@ -101,9 +113,13 @@ export async function getSshPtyForegroundProcess(
 
 export async function inspectSshPtyProcess(
   mux: SshChannelMultiplexer,
-  relayPtyId: string
+  relayPtyId: string,
+  options?: { expectedIncarnationId?: string; scanChildProcesses?: boolean }
 ): Promise<PtyProcessInspection> {
-  return (await mux.request('pty.inspectProcess', { id: relayPtyId })) as PtyProcessInspection
+  return (await mux.request('pty.inspectProcess', {
+    id: relayPtyId,
+    ...options
+  })) as PtyProcessInspection
 }
 
 export async function serializeSshPtys(

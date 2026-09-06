@@ -310,7 +310,7 @@ export class WebSocketTransport implements RpcTransport {
       preAuthTimers: this.preAuthTimers,
       clientIds: this.wsClientIds,
       heartbeatConnections: this.heartbeatConnections,
-      getClients: () => this.wss?.clients ?? [],
+      getClients: () => this.wsClientIds.keys(),
       messageHandler: this.messageHandler,
       connectionCloseHandler: this.connectionCloseHandler
     })

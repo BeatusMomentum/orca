@@ -158,6 +158,7 @@ type RuntimeTypeInventory = [
   Runtime.RuntimeTerminalSplit,
   Runtime.RuntimeTerminalState,
   Runtime.RuntimeTerminalSummary,
+  Runtime.RuntimeTerminalUnavailableReason,
   Runtime.RuntimeTerminalVisualGroupNode,
   Runtime.RuntimeTerminalVisualLayout,
   Runtime.RuntimeTerminalVisualLayoutNode,

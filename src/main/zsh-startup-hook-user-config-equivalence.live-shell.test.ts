@@ -382,9 +382,12 @@ describe.skipIf(process.platform === 'win32')('the fixes the old wrapper was bui
     // value this wrapper cannot use degrades to $HOME, where zsh itself looks.
     const home = makeZshHome({ '.zshrc': 'export ORCA_TEST_FROM_ZSHRC=1\n' })
     try {
+      // Unique per run: a fixed name here shares one path with every other run in
+      // the system temp dir, so a killed run leaves a stale directory behind and
+      // every later rename onto it fails with ENOTEMPTY.
       const { values } = await runFromRelocatedRoot(
         home,
-        join(dirname(userDataPath), `${basename(userDataPath)}-홍길동-wsl-view`)
+        join(dirname(userDataPath), `홍길동-${basename(userDataPath)}`)
       )
 
       expect(values.ORCA_TEST_FROM_ZSHRC).toBe('1')

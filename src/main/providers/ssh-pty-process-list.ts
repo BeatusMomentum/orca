@@ -10,12 +10,15 @@ export async function listSshPtyProcesses(
     connectionId: string
     livePtyIds: Set<string>
     outputState: SshPtyProviderOutputState
+    includeForegroundProcessEvidence?: boolean
     deadlineMs?: number
   }>
 ): Promise<PtyProcessInfo[]> {
   const result = await args.mux.request(
     'pty.listProcesses',
-    undefined,
+    args.includeForegroundProcessEvidence === undefined
+      ? undefined
+      : { includeForegroundProcessEvidence: args.includeForegroundProcessEvidence },
     args.deadlineMs === undefined
       ? undefined
       : { timeoutMs: Math.max(1, args.deadlineMs - Date.now()) }

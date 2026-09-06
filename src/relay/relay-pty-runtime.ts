@@ -24,7 +24,12 @@ export type RelayPtyModule = Readonly<{
 type BunGlobal = typeof globalThis & { Bun?: BunRuntime }
 
 /** Selects Bun.Terminal when this relay is actually running under Bun. */
-export async function loadRelayPtyRuntime(options: { skipNode?: boolean } = {}): Promise<RelayPtyModule | null> {
+export async function loadRelayPtyRuntime(
+  options: {
+    skipNode?: boolean
+    onNodeLoadError?: (error: unknown) => void
+  } = {}
+): Promise<RelayPtyModule | null> {
   const bun = (globalThis as BunGlobal).Bun
   if (canUseBunPty(bun)) {
     return {
@@ -55,7 +60,8 @@ export async function loadRelayPtyRuntime(options: { skipNode?: boolean } = {}):
         return nodePty.spawn(shell, args, options)
       }
     }
-  } catch {
+  } catch (error) {
+    options.onNodeLoadError?.(error)
     return null
   }
 }

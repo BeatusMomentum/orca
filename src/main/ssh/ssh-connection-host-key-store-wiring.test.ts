@@ -72,7 +72,7 @@ vi.mock('ssh2', async (importOriginal) => {
     Client: MockSshClient,
     BaseAgent: MockBaseAgent,
     utils,
-    default: { Client: MockSshClient, BaseAgent: MockBaseAgent }
+    default: { Client: MockSshClient, BaseAgent: MockBaseAgent, utils }
   }
 })
 

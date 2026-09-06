@@ -1,6 +1,7 @@
 import { getDefaultWorkspaceSession } from '../../shared/constants'
 import type { SleepingAgentSessionRecord } from '../../shared/agent-session-resume'
 import type { BrowserPage, BrowserWorkspace } from '../../shared/browser-workspace-types'
+import { remapBrowserPageDocLocation } from '../../shared/browser-page-doc-location'
 import type { WorkspaceKey } from '../../shared/folder-workspace-types'
 import type { Tab, TabGroup } from '../../shared/tab-types'
 import type { TerminalTab } from '../../shared/terminal-tab-types'
@@ -221,6 +222,24 @@ function mapBrowserWorkspace(
   return {
     ...structuredClone(workspace),
     worktreeId: projection.mapWorktreeId(workspace.worktreeId),
+    ...(workspace.docLocation
+      ? {
+          docLocation: remapBrowserPageDocLocation(
+            workspace.docLocation,
+            workspace.docLocation.worktreeId,
+            projection.mapWorktreeId(workspace.docLocation.worktreeId)
+          )
+        }
+      : {}),
+    ...(workspace.docLocation
+      ? {
+          docLocation: remapBrowserPageDocLocation(
+            workspace.docLocation,
+            workspace.docLocation.worktreeId,
+            projection.mapWorktreeId(workspace.docLocation.worktreeId)
+          )
+        }
+      : {}),
     sessionProfileId: null,
     sessionPartition: null
   }
@@ -229,7 +248,16 @@ function mapBrowserWorkspace(
 function mapBrowserPage(page: BrowserPage, projection: SessionOwnerProjection): BrowserPage {
   return {
     ...structuredClone(page),
-    worktreeId: projection.mapWorktreeId(page.worktreeId)
+    worktreeId: projection.mapWorktreeId(page.worktreeId),
+    ...(page.docLocation
+      ? {
+          docLocation: remapBrowserPageDocLocation(
+            page.docLocation,
+            page.docLocation.worktreeId,
+            projection.mapWorktreeId(page.docLocation.worktreeId)
+          )
+        }
+      : {})
   }
 }
 

@@ -3,24 +3,22 @@
 // and the sentinel wait that turns a wsl.exe child's stdio into a
 // MultiplexerTransport. Kept separate from the manager so the state machine
 // stays readable. See docs/agent-status-over-wsl.md (STA-1515).
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { getAppEnvironment } from '../../shared/app-environment'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+export { resolveWslHookRelayBundle, type WslHookRelayBundle } from './wsl-hook-relay-bundle'
 import { ORCAD_BUN_VERSION } from '../../shared/orcad-bun-runtime'
 
 import type { MultiplexerTransport } from '../ssh/ssh-channel-multiplexer'
 import {
-  decodeWslText,
   MAX_STARTUP_BUFFER_BYTES,
   type waitForWslRelaySentinel,
   type WslRelayStartupFailure
 } from './wsl-hook-relay-sentinel'
 import { addOrcaWslInteropEnv } from '../pty/wsl-orca-env'
 import { runWslProcess } from '../wsl/wsl-runner'
+import { resolveWslInteropSpawnCwd } from '../wsl-interop-spawn-directory'
+import { listRunningWslDistrosAsync } from '../wsl'
 import {
   WSL_HOOK_RELAY_BUNDLE_NAME,
-  WSL_HOOK_RELAY_BUN_REQUIRED_FILE,
   WSL_HOOK_RELAY_DIR,
   WSL_HOOK_RELAY_INSTANCE_ENV,
   WSL_HOOK_RELAY_NO_NODE_EXIT_CODE,
@@ -30,62 +28,6 @@ import {
 } from '../../shared/wsl-hook-relay-contract'
 
 const INSTALL_TIMEOUT_MS = 30_000
-
-export type WslHookRelayBundle = {
-  jsPath: string
-  version: string
-  /** Optional staged Bun executables keyed by `<arch>-<libc>`. */
-  bunRuntimePaths?: Record<string, string>
-  /** Release bundles set this so a missing Bun never falls back to distro Node. */
-  requiresBundledBun?: boolean
-}
-
-export function resolveWslHookRelayBundle(): WslHookRelayBundle | null {
-  // Mirrors getLocalRelayCandidates in ssh-relay-deploy: env override for
-  // tests/dev, then packaged extraResources, then dev out/ paths.
-  const candidates: string[] = []
-  if (process.env.ORCA_RELAY_PATH) {
-    candidates.push(join(process.env.ORCA_RELAY_PATH, 'wsl'))
-  }
-  if (process.resourcesPath) {
-    candidates.push(join(process.resourcesPath, 'relay', 'wsl'))
-    candidates.push(join(process.resourcesPath, 'app.asar.unpacked', 'out', 'relay', 'wsl'))
-  }
-  try {
-    const appPath = getAppEnvironment().getAppPath()
-    candidates.push(join(appPath, 'resources', 'relay', 'wsl'))
-    candidates.push(join(appPath, 'out', 'relay', 'wsl'))
-  } catch {
-    // app not ready in some test contexts — env/resources candidates suffice.
-  }
-  for (const dir of candidates) {
-    const jsPath = join(dir, WSL_HOOK_RELAY_BUNDLE_NAME)
-    const versionPath = join(dir, WSL_HOOK_RELAY_VERSION_FILE)
-    if (existsSync(jsPath) && existsSync(versionPath)) {
-      const version = readFileSync(versionPath, 'utf8').trim()
-      // Why: the version lands inside single-quoted guest shell text and in
-      // a guest path segment — refuse anything outside the safe alphabet.
-      if (/^[A-Za-z0-9+.-]+$/.test(version)) {
-        const bunRuntimePaths: Record<string, string> = {}
-        for (const key of ['x64-glibc', 'x64-musl', 'arm64-glibc', 'arm64-musl']) {
-          const runtimePath = join(dir, `bun-runtime-linux-${key}`)
-          if (existsSync(runtimePath)) {
-            bunRuntimePaths[key] = runtimePath
-          }
-        }
-        return {
-          jsPath,
-          version,
-          ...(existsSync(join(dir, WSL_HOOK_RELAY_BUN_REQUIRED_FILE))
-            ? { requiresBundledBun: true }
-            : {}),
-          ...(Object.keys(bunRuntimePaths).length > 0 ? { bunRuntimePaths } : {})
-        }
-      }
-    }
-  }
-  return null
-}
 
 // Why: the install dir is namespaced by bundle version so concurrent Orca
 // instances with different bundles (dev + prod) never reinstall over each
@@ -203,7 +145,11 @@ export function spawnWslRelayProcess(
   return spawn('wsl.exe', ['-d', distro, '--exec', 'sh', '-c', command], {
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
-    windowsHide: true
+    windowsHide: true,
+    // Why explicit (#16463): the guest path is in `command`, so the Windows cwd
+    // only decides whether CreateProcessW succeeds -- and an inherited one is a
+    // worktree the user can delete, which kills every later relay launch.
+    cwd: resolveWslInteropSpawnCwd()
   })
 }
 
@@ -215,27 +161,10 @@ export function spawnWslRelayProcess(
  *  (the next WSL PTY spawn re-ensures), and a wsl.exe too wedged to list
  *  distros would not have launched the relay anyway. */
 export function isWslDistroRunning(distro: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    execFile(
-      'wsl.exe',
-      ['--list', '--running', '--quiet'],
-      // Why: WSL_UTF8=1 forces UTF-8 output; without it wsl.exe emits
-      // UTF-16LE that reads as NUL-riddled text.
-      { env: { ...process.env, WSL_UTF8: '1' }, timeout: 10_000, windowsHide: true },
-      (err, stdout) => {
-        if (err) {
-          resolve(false)
-          return
-        }
-        const wanted = distro.trim().toLowerCase()
-        const running = decodeWslText(String(stdout))
-          .split(/\r?\n/)
-          .map((line) => line.trim().toLowerCase())
-          .filter(Boolean)
-        resolve(running.includes(wanted))
-      }
-    )
-  })
+  const wanted = distro.trim().toLowerCase()
+  return listRunningWslDistrosAsync().then((running) =>
+    running.some((candidate) => candidate.toLowerCase() === wanted)
+  )
 }
 
 export async function runWslInstallProcess(

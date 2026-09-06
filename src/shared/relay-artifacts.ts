@@ -41,6 +41,12 @@ export type RelayArtifact = {
   platforms?: readonly RelayBuildPlatform[]
   /** Kept in the legacy boolean view for already-built relay packages. */
   legacyOnly?: boolean
+  /**
+   * Forked by the relay daemon as a long-lived child of its own. These are relay
+   * infrastructure, never user work, and the reap gate subtracts them from a daemon's
+   * child census; see src/main/ssh/relay-daemon-service-children.ts.
+   */
+  daemonServiceChild?: boolean
 }
 
 /** The bare Windows process-table addon; see docs/reference/windows-process-enumeration.md. */
@@ -81,8 +87,8 @@ const LINUX_RELAY_PLATFORMS = ['linux-x64', 'linux-arm64'] as const
 
 export const RELAY_ARTIFACTS: readonly RelayArtifact[] = [
   { filename: 'relay.js' },
-  { filename: 'relay-watcher.js' },
-  { filename: 'relay-ai-vault-service.js' },
+  { filename: 'relay-watcher.js', daemonServiceChild: true },
+  { filename: 'relay-ai-vault-service.js', daemonServiceChild: true },
   { filename: 'managed-hook-runtime.js' },
   // Forked by the AI Vault title reader; without it a relay answers every WSL
   // title request with no title and no error.
@@ -105,11 +111,28 @@ export const RELAY_ARTIFACTS: readonly RelayArtifact[] = [
   { filename: RELAY_BUN_MUSL_RUNTIME_FILENAME, optional: true, platforms: LINUX_RELAY_PLATFORMS },
   { filename: RELAY_BUN_REQUIRED_FILENAME, optional: true },
   { filename: 'node-pty-1.1.0-console-list-agent-patch.cjs', windowsOnly: true },
+  // The ConPTY teardown release the desktop's own node-pty patch already carries; pnpm patches do
+  // not cross the SSH boundary, so a relay ran the unpatched npm tree and leaked one Windows File
+  // handle per terminal for the life of the relay process.
+  { filename: 'node-pty-1.1.0-windows-pty-teardown-patch.cjs', windowsOnly: true },
+  // Only Linux relays run it, but it ships everywhere: the manifest's only
+  // platform axis is Windows, and a second one would buy nothing but a fork in
+  // the hash. Its presence is what moves a host to a fresh relay directory, and
+  // therefore to a re-install that can apply it.
+  { filename: 'node-pty-1.1.0-master-cloexec-patch.cjs' },
   // Optional because only a Windows build machine can compile it. Without it the
   // relay reads the process table through a PowerShell scan instead -- slower,
   // but correct, so a relay built anywhere else is still shippable.
   { filename: RELAY_WINDOWS_PROCESS_TREE_FILENAME, windowsOnly: true, optional: true }
 ]
+
+/**
+ * The daemon's own service children, by entry filename. Anything else under a relay pid is
+ * either user work or unidentified, and both keep the relay unreapable.
+ */
+export const RELAY_DAEMON_SERVICE_ENTRY_FILENAMES: readonly string[] = RELAY_ARTIFACTS.filter(
+  (artifact) => artifact.daemonServiceChild
+).map((artifact) => artifact.filename)
 
 /** Written after the artifacts, so it is never an input to its own hash. */
 export const RELAY_VERSION_FILENAME = '.version'

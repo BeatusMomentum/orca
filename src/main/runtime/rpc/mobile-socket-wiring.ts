@@ -169,9 +169,18 @@ export class MobileSocketWiring {
             ws,
             connectionId,
             device,
-            clientCapabilities: channel.clientCapabilities,
-            transport: metadata,
-            connectionGeneration
+            // Why: the channel owns the set for the whole connection, so this reads
+            // through rather than snapshotting. It must also WRITE through — the
+            // capability RPC updates the socket, and a getter-only property makes
+            // that a TypeError, which strands a capable phone with no capabilities.
+            get clientCapabilities() {
+              return channel.clientCapabilities
+            },
+            set clientCapabilities(next: readonly RuntimeCapability[]) {
+              channel.clientCapabilities = next
+            },
+            connectionGeneration,
+            transport: metadata
           }
           this.authenticatedSockets.set(ws, socket)
           transport.setClientId(ws, device.deviceToken)

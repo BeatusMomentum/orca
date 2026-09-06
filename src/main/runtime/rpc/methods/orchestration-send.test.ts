@@ -46,6 +46,21 @@ describe('orchestration RPC methods', () => {
   }
 
   describe('orchestration.send', () => {
+    it('does not resolve process incarnation for ordinary messages', async () => {
+      setup()
+      const resolveProcessIncarnation = vi.mocked(runtime.getTerminalProcessIncarnation)
+      resolveProcessIncarnation.mockClear()
+
+      const result = (await call('orchestration.send', {
+        from: 'term_coord',
+        to: `run:${activeRunId}`,
+        subject: 'hello'
+      })) as { message: { type: string } }
+
+      expect(result.message.type).toBe('status')
+      expect(resolveProcessIncarnation).not.toHaveBeenCalled()
+    })
+
     it('sends a message', async () => {
       setup()
       // Why: send notifies arrival so already-idle recipients get push-on-idle
@@ -591,7 +606,10 @@ describe('orchestration RPC methods', () => {
         connected: opts.connected ?? true,
         writable: opts.writable ?? true,
         lastOutputAt: opts.lastOutputAt ?? null,
-        preview: opts.preview ?? ''
+        preview: opts.preview ?? '',
+        // Why spread: absent `agentIdentity` means unknown, so the helper must be able to
+        // produce a summary that genuinely lacks the field.
+        ...(opts.agentIdentity ? { agentIdentity: opts.agentIdentity } : {})
       }
     }
 
@@ -726,11 +744,11 @@ describe('orchestration RPC methods', () => {
       expect(result.messages[0].to_handle).toBe('term_b')
     })
 
-    it('fans out agent name group (@claude) by title match', async () => {
+    it('fans out an agent name group by host-resolved identity', async () => {
       setupWithTerminals([
-        makeSummary('term_a', { title: 'Claude Code' }),
-        makeSummary('term_b', { title: 'Claude Code' }),
-        makeSummary('term_c', { title: 'Codex' })
+        makeSummary('term_a', { agentIdentity: 'claude' }),
+        makeSummary('term_b', { agentIdentity: 'claude' }),
+        makeSummary('term_c', { agentIdentity: 'codex' })
       ])
 
       const result = (await call('orchestration.send', {
@@ -743,11 +761,13 @@ describe('orchestration RPC methods', () => {
       expect(result.messages[0].to_handle).toBe('term_b')
     })
 
-    it('fans out @droid by title match', async () => {
+    it('fans out @droid without claiming a pane whose title merely contains the word', async () => {
       setupWithTerminals([
-        makeSummary('term_a', { title: 'Codex' }),
-        makeSummary('term_b', { title: 'Droid ready' }),
-        makeSummary('term_c', { title: 'Android build' })
+        makeSummary('term_a', { agentIdentity: 'codex' }),
+        makeSummary('term_b', { agentIdentity: 'droid' }),
+        // Why kept: "Android build" contains `droid` as a substring. It was excluded before by
+        // whole-token matching and is excluded now because its identity is not droid.
+        makeSummary('term_c', { agentIdentity: 'claude', title: 'Android build' })
       ])
 
       const result = (await call('orchestration.send', {
@@ -760,11 +780,12 @@ describe('orchestration RPC methods', () => {
       expect(result.messages[0].to_handle).toBe('term_b')
     })
 
-    it('fans out @cursor by title match without claiming a cursor-mentioning title', async () => {
+    it('fans out @cursor without claiming a Claude pane discussing a text cursor', async () => {
       setupWithTerminals([
-        makeSummary('term_a', { title: 'Codex' }),
-        makeSummary('term_b', { title: 'Cursor ready' }),
-        makeSummary('term_c', { title: '✳ Fix the text cursor blink' })
+        makeSummary('term_a', { agentIdentity: 'codex' }),
+        makeSummary('term_b', { agentIdentity: 'cursor' }),
+        // The original hazard, now excluded structurally rather than by a bespoke predicate.
+        makeSummary('term_c', { agentIdentity: 'claude', title: '✳ Fix the text cursor blink' })
       ])
 
       const result = (await call('orchestration.send', {

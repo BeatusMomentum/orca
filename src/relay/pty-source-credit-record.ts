@@ -18,6 +18,7 @@ import {
   assertPtySourceSpan
 } from '../shared/pty-source-credit-validation'
 import { chargedPtyRetainedStringBytes } from '../shared/pty-retained-string-memory'
+import { PtySourceSentBoundaries } from './pty-source-sent-boundaries'
 
 export const DEFAULT_RETAINED_SOURCE_SU = 512 * 1024
 export const DEFAULT_AGGREGATE_RETAINED_SOURCE_SU = 48 * 1024 * 1024
@@ -43,7 +44,9 @@ export type DeliveryRecord = {
   creditedEndSu: number
   retainedDataBytes: number
   spans: PtySourceSpan[]
-  sentBoundaries: Set<number>
+  /** First retained span that may contain the next unsent source unit. */
+  sendSpanIndex: number
+  sentBoundaries: PtySourceSentBoundaries
   pendingSend: PtySourceSendReservation | null
   reservedAckEndSu: number | null
   attemptedEndSu: number | null
@@ -69,7 +72,8 @@ export function createDeliveryRecord(
     creditedEndSu: checkpointSourceEndSu,
     retainedDataBytes: 0,
     spans: [],
-    sentBoundaries: new Set([checkpointSourceEndSu]),
+    sendSpanIndex: 0,
+    sentBoundaries: new PtySourceSentBoundaries(checkpointSourceEndSu),
     pendingSend: null,
     reservedAckEndSu: null,
     attemptedEndSu: null,
@@ -185,6 +189,15 @@ export function sliceForSend(
   return slice
 }
 
+export function findPtySourceSpanForSend(record: DeliveryRecord): PtySourceSpan | undefined {
+  let span = record.spans[record.sendSpanIndex]
+  while (span && span.sourceEndSu <= record.sentEndSu) {
+    record.sendSpanIndex += 1
+    span = record.spans[record.sendSpanIndex]
+  }
+  return span
+}
+
 export function snapshotDeliveryRecord(record: DeliveryRecord): PtySourceDeliverySnapshot {
   return Object.freeze({
     ...record.identity,
@@ -211,30 +224,6 @@ export function matchingDeliverySnapshot(
   }
   const closed = closedSnapshots.get(key)
   return closed && samePtySourceDelivery(closed, identity) ? closed : null
-}
-
-export function retainedSourceTotal(records: Iterable<DeliveryRecord>): number {
-  let total = 0
-  for (const record of records) {
-    total += record.receivedEndSu - record.creditedEndSu
-  }
-  return total
-}
-
-export function retainedDataBytesTotal(records: Iterable<DeliveryRecord>): number {
-  let total = 0
-  for (const record of records) {
-    total += record.retainedDataBytes
-  }
-  return total
-}
-
-export function retainedSpanTotal(records: Iterable<DeliveryRecord>): number {
-  let total = 0
-  for (const record of records) {
-    total += record.spans.length
-  }
-  return total
 }
 
 export function createReplacementDeliveryRecord(
@@ -271,6 +260,7 @@ export function createReplacementDeliveryRecord(
     .filter((span) => span.sourceEndSu > acceptedSourceEndSu)
     .map((span) => sliceAtSourceStart(span, Math.max(span.sourceStartSu, acceptedSourceEndSu)))
     .map((span) => Object.freeze({ ...span, ...replacement.identity }))
+  replacement.sendSpanIndex = 0
   replacement.retainedDataBytes = replacement.spans.reduce(
     (bytes, span) => bytes + chargedPtyRetainedStringBytes(span.data),
     0

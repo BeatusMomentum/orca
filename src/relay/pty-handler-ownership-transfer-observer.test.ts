@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PtyHandler } from './pty-handler'
 import type { PtyOwnershipTransferOutputFragment } from '../shared/pty-ownership-transfer-output-envelope'
-import { beginPtyHandlerTest, endPtyHandlerTest } from './pty-handler-test-harness'
+import { beginPtyHandlerTest, endPtyHandlerTest, testPtyId } from './pty-handler-test-harness'
 import type { MockDispatcher } from './pty-handler-test-harness'
 
 const { mockPtySpawn, mockPtyInstance, mockCreateShellPromptReadinessProbe } = vi.hoisted(() => ({
@@ -67,10 +67,10 @@ describe('PtyHandler ownership-transfer output observer', () => {
 
     await dispatcher.callRequest('pty.spawn', {})
     dataCallback?.('hello')
-    expect(observer.observeOutput).toHaveBeenCalledWith('pty-1', 'hello', '0:5')
+    expect(observer.observeOutput).toHaveBeenCalledWith(testPtyId(1), 'hello', '0:5')
 
     exitCallback?.({ exitCode: 0 })
-    expect(observer.removeTerminal).toHaveBeenCalledWith('pty-1')
+    expect(observer.removeTerminal).toHaveBeenCalledWith(testPtyId(1))
   })
 
   it('advertises mutation routes only after the explicit runtime opt-in', async () => {
@@ -128,7 +128,7 @@ describe('PtyHandler ownership-transfer output observer', () => {
         data: 'still published',
         ownershipTransfer: {
           bridgeId: 'bridge-1',
-          terminalId: 'pty-1',
+          terminalId: testPtyId(1),
           incarnationId: 'incarnation-1',
           ownerLease: 'lease-1',
           sourceOwnerGeneration: 1,
@@ -143,7 +143,7 @@ describe('PtyHandler ownership-transfer output observer', () => {
     ])
     vi.advanceTimersByTime(8)
     expect(dispatcher.notify).toHaveBeenCalledWith('pty.data', {
-      id: 'pty-1',
+      id: testPtyId(1),
       data: 'still published',
       ownershipTransfer: expect.objectContaining({ bridgeId: 'bridge-1', frameSeq: 1 })
     })
@@ -163,7 +163,7 @@ describe('PtyHandler ownership-transfer output observer', () => {
           data: 'transfer',
           ownershipTransfer: {
             bridgeId: 'bridge-1',
-            terminalId: 'pty-1',
+            terminalId: testPtyId(1),
             incarnationId: 'incarnation-1',
             ownerLease: 'lease-1',
             sourceOwnerGeneration: 1,
@@ -184,7 +184,7 @@ describe('PtyHandler ownership-transfer output observer', () => {
     vi.advanceTimersByTime(8)
 
     expect(dispatcher.notify).toHaveBeenCalledWith('pty.data', {
-      id: 'pty-1',
+      id: testPtyId(1),
       data: 'transfer',
       ownershipTransfer: expect.objectContaining({ bridgeId: 'bridge-1', frameSeq: 2 })
     })

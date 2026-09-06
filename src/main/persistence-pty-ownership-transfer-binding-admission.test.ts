@@ -4,7 +4,14 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getDefaultWorkspaceSession } from '../shared/constants'
 import type { WorkspaceSessionState } from '../shared/workspace-session-state-types'
-import { makeTerminalTab, createStore, testState } from './persistence-test-harness'
+import {
+  makeTerminalTab,
+  makeRepo,
+  createStore,
+  testState,
+  readDataFile
+} from './persistence-test-harness'
+import type { PersistedState } from '../shared/persisted-state-types'
 import { TEST_LEAF_1, TEST_LEAF_2 } from './persistence-session-fixtures'
 
 vi.mock('electron', () => ({
@@ -68,6 +75,9 @@ function sessionWithSurface(
 describe('strict PTY ownership-transfer binding admission', () => {
   beforeEach(() => {
     testState.dir = mkdtempSync(join(tmpdir(), 'orca-transfer-binding-'))
+    const store = createStore()
+    store.addRepo(makeRepo({ id: 'repo-transfer' }))
+    store.flushOrThrow()
   })
 
   afterEach(() => {
@@ -91,6 +101,9 @@ describe('strict PTY ownership-transfer binding admission', () => {
 
     expect(store.persistPtyBinding(binding())).toBe(true)
     expect(store.getWorkspaceSession()).toEqual(published)
+    expect((readDataFile() as PersistedState).workspaceSession.tabsByWorktree[WORKTREE]).toEqual(
+      published.tabsByWorktree[WORKTREE]
+    )
     const reloaded = createStore().getWorkspaceSession()
     expect(reloaded.tabsByWorktree[WORKTREE]).toEqual([
       expect.objectContaining({ id: TAB, worktreeId: WORKTREE, ptyId: PTY })

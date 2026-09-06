@@ -30,6 +30,7 @@ import type {
   PtyOwnershipTransferStatusProbeRequest
 } from '../../shared/pty-ownership-transfer-orchestration'
 import type { PtyOwnershipTransferStatusResult } from '../../shared/pty-ownership-transfer-wire'
+import type { RemoteRuntimeSharedConnectionDiagnostics } from '../../shared/remote-runtime-shared-control-types'
 
 export type RuntimeEnvironmentSubscriptionHandle = {
   unsubscribe: () => void
@@ -52,6 +53,10 @@ export type RuntimeApi = {
       request: PtyOwnershipTransferStatusProbeRequest
     ) => Promise<PtyOwnershipTransferStatusResult>
     call: (args: { method: string; params?: unknown }) => Promise<RuntimeRpcResponse<unknown>>
+    subscribe: (
+      args: { method: string; params?: unknown },
+      callback: (response: RuntimeRpcResponse<unknown>) => void
+    ) => Promise<RuntimeEnvironmentSubscriptionHandle>
     getTerminalFitOverrides: () => Promise<
       { ptyId: string; mode: 'mobile-fit' | 'remote-desktop-fit'; cols: number; rows: number }[]
     >
@@ -132,7 +137,16 @@ export type RuntimeApi = {
     getStatus: (args: {
       selector: string
       timeoutMs?: number
+      observeOnly?: true
     }) => Promise<RuntimeRpcResponse<RuntimeStatus>>
+    retryControlConnection?: (args: { selector: string }) => Promise<void>
+    onSharedControlDiagnostics?: (
+      callback: (event: {
+        environmentId: string
+        transportGeneration: number
+        diagnostics: RemoteRuntimeSharedConnectionDiagnostics
+      }) => void
+    ) => () => void
     prepareBrowserClientHostPlacement: (
       args: BrowserClientHostPlacementPreparationRequest
     ) => Promise<BrowserPageCreationPlacement>

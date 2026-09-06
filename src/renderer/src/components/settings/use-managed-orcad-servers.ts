@@ -1,164 +1,43 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { toast } from 'sonner'
-import type {
-  OrcadManagedDeployResult,
-  OrcadManagedPendingMigration,
-  OrcadManagedRuntimeStatus
-} from '../../../../shared/orcad-managed-runtime'
-import type { OrcadMigrationPreflight } from '../../../../shared/orcad-migration-preflight'
-import {
-  isManagedOrcadRuntimeEnvironment,
-  type PublicKnownRuntimeEnvironment
-} from '../../../../shared/runtime-environments'
-import type { SshTarget } from '../../../../shared/ssh-types'
+import type { OrcadManagedDeployResult } from '../../../../shared/orcad-managed-runtime'
 import { translate } from '@/i18n/i18n'
-
-export type ManagedOrcadStatusEntry =
-  | { state: 'ready'; status: OrcadManagedRuntimeStatus }
-  | { state: 'error'; message: string }
-  | { state: 'loading' }
-
-export type ManagedOrcadForceOperation =
-  | {
-      kind: 'create'
-      name: string
-      sshTargetId: string
-      candidateVersion: string
-      reason: string
-    }
-  | {
-      kind: 'update'
-      environmentId: string
-      candidateVersion: string
-      reason: string
-    }
-  | {
-      kind: 'resume'
-      environmentId: string
-      name: string
-      sshTargetId: string
-      candidateVersion: string
-      reason: string
-    }
-
-export type ManagedOrcadConfirmation =
-  | { kind: 'rollback'; environmentId: string; environmentName: string; previousVersion: string }
-  | { kind: 'stop'; environmentId: string; environmentName: string }
-
-export type ManagedOrcadBusyAction = {
-  id: string
-  action: 'deploy' | 'resume' | 'update' | 'rollback' | 'recover' | 'stop'
-}
-
-export type ManagedOrcadResumeInput = Pick<
-  OrcadManagedPendingMigration,
-  'environmentId' | 'name' | 'sshTargetId'
->
-
-export type ManagedOrcadTargetPreflightEntry =
-  | { state: 'loading'; targetId: string }
-  | { state: 'ready'; targetId: string; preflight: OrcadMigrationPreflight }
-  | { state: 'error'; targetId: string; message: string }
+import { useManagedOrcadCatalog } from './use-managed-orcad-catalog'
+import type {
+  ManagedOrcadBusyAction,
+  ManagedOrcadConfirmation,
+  ManagedOrcadForceOperation,
+  ManagedOrcadResumeInput
+} from './managed-orcad-server-types'
+export type {
+  ManagedOrcadStatusEntry,
+  ManagedOrcadTargetPreflightEntry,
+  ManagedOrcadBusyAction,
+  ManagedOrcadConfirmation,
+  ManagedOrcadForceOperation,
+  ManagedOrcadResumeInput
+} from './managed-orcad-server-types'
 
 export function useManagedOrcadServers(onEnvironmentsChanged: () => Promise<void> | void) {
-  const [environments, setEnvironments] = useState<PublicKnownRuntimeEnvironment[]>([])
-  const [targets, setTargets] = useState<SshTarget[]>([])
-  const [pendingMigrations, setPendingMigrations] = useState<OrcadManagedPendingMigration[]>([])
-  const [statuses, setStatuses] = useState<Record<string, ManagedOrcadStatusEntry>>({})
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
+  const {
+    environments,
+    targets,
+    pendingMigrations,
+    statuses,
+    loading,
+    loadError,
+    sshTargetId,
+    targetPreflight,
+    load,
+    selectSshTarget
+  } = useManagedOrcadCatalog()
   const [formOpen, setFormOpen] = useState(false)
   const [name, setName] = useState('')
-  const [sshTargetId, setSshTargetId] = useState('')
-  const [targetPreflight, setTargetPreflight] = useState<ManagedOrcadTargetPreflightEntry | null>(
-    null
-  )
   const [createError, setCreateError] = useState<string | null>(null)
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   const [busyAction, setBusyAction] = useState<ManagedOrcadBusyAction | null>(null)
   const [forceOperation, setForceOperation] = useState<ManagedOrcadForceOperation | null>(null)
   const [confirmation, setConfirmation] = useState<ManagedOrcadConfirmation | null>(null)
-  const loadRequestRef = useRef(0)
-  const preflightRequestRef = useRef(0)
-
-  const load = useCallback(async (): Promise<void> => {
-    const requestId = ++loadRequestRef.current
-    setLoading(true)
-    setLoadError(null)
-    try {
-      const [listedEnvironments, listedTargets, listedPendingMigrations] = await Promise.all([
-        window.api.runtimeEnvironments.list(),
-        window.api.ssh.listTargets(),
-        window.api.runtimeEnvironments.listPendingOrcadMigrations()
-      ])
-      const managed = listedEnvironments.filter(isManagedOrcadRuntimeEnvironment)
-      const resolvedStatuses = await Promise.all(
-        managed.map(async (environment) => {
-          try {
-            return [
-              environment.id,
-              {
-                state: 'ready' as const,
-                status: await window.api.runtimeEnvironments.getOrcadStatus({
-                  selector: environment.id
-                })
-              }
-            ] as const
-          } catch (error) {
-            return [
-              environment.id,
-              { state: 'error' as const, message: errorMessage(error) }
-            ] as const
-          }
-        })
-      )
-      if (loadRequestRef.current !== requestId) {
-        return
-      }
-      setEnvironments(managed)
-      setTargets(listedTargets)
-      setPendingMigrations(listedPendingMigrations)
-      setStatuses(Object.fromEntries(resolvedStatuses))
-    } catch (error) {
-      if (loadRequestRef.current === requestId) {
-        setLoadError(errorMessage(error))
-      }
-    } finally {
-      if (loadRequestRef.current === requestId) {
-        setLoading(false)
-      }
-    }
-  }, [])
-
-  useEffect(() => {
-    void load()
-    return () => {
-      loadRequestRef.current += 1
-      preflightRequestRef.current += 1
-    }
-  }, [load])
-
-  const selectSshTarget = (targetId: string): void => {
-    setSshTargetId(targetId)
-    const requestId = ++preflightRequestRef.current
-    if (!targetId) {
-      setTargetPreflight(null)
-      return
-    }
-    setTargetPreflight({ state: 'loading', targetId })
-    void window.api.runtimeEnvironments
-      .preflightOrcadTarget({ sshTargetId: targetId })
-      .then((preflight) => {
-        if (preflightRequestRef.current === requestId) {
-          setTargetPreflight({ state: 'ready', targetId, preflight })
-        }
-      })
-      .catch((error: unknown) => {
-        if (preflightRequestRef.current === requestId) {
-          setTargetPreflight({ state: 'error', targetId, message: errorMessage(error) })
-        }
-      })
-  }
 
   const refreshAfterMutation = async (): Promise<void> => {
     await Promise.all([load(), onEnvironmentsChanged()])

@@ -91,11 +91,15 @@ export class SshPtyOwnershipTransferProviderControls {
       keepHistory?: boolean
       deadlineMs?: number
       operationId?: string
+      expectedIncarnationId?: string
+      expectedOwnerClientInstanceId?: string
     }
   ): Promise<void> {
     const ptyId = this.toAppPtyId(id)
     if (!this.routes.hasTransferred(ptyId)) {
       await shutdownSshPty(this.mux, this.toRelayPtyId(id), {
+        expectedIncarnationId: opts.expectedIncarnationId,
+        expectedOwnerClientInstanceId: opts.expectedOwnerClientInstanceId,
         immediate: opts.immediate,
         keepHistory: opts.keepHistory,
         timeoutMs: timeoutUntil(opts.deadlineMs)

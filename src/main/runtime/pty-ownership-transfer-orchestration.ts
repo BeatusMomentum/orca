@@ -53,7 +53,7 @@ export type RuntimeOwnedPtyOwnershipTransferReadOnlySource = Readonly<{
     request: PtyOwnershipTransferSourceGrantRequest,
     binding: RuntimePtyOwnershipTransferAttachmentBinding
   ) => PtyOwnershipTransferSourceGrant
-}> 
+}>
 
 type OrchestrationOptions = Readonly<{
   runtimeId: string
@@ -180,7 +180,10 @@ export class PtyOwnershipTransferOrchestrator {
     }
     const provider = this.options.getLocalProvider?.()
     if (!provider) {
-      return createPtyOwnershipTransferPreflightResult('runtime-owned', 'source-provider-unavailable')
+      return createPtyOwnershipTransferPreflightResult(
+        'runtime-owned',
+        'source-provider-unavailable'
+      )
     }
     const readOnlySource = this.options.getLocalReadOnlySource?.() ?? null
     if (readOnlySource) {

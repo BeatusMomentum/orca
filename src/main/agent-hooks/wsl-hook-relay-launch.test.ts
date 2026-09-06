@@ -1,6 +1,20 @@
 import { execFileSync } from 'node:child_process'
-import { describe, expect, it } from 'vitest'
-import { buildGuestInstallScript, buildGuestLaunchScript } from './wsl-hook-relay-launch'
+import type * as ChildProcess from 'node:child_process'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  buildGuestInstallScript,
+  buildGuestLaunchScript,
+  spawnWslRelayProcess
+} from './wsl-hook-relay-launch'
+
+const { spawnMock } = vi.hoisted(() => ({
+  spawnMock: vi.fn((..._args: unknown[]) => ({ pid: 1 }))
+}))
+
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<typeof ChildProcess>()),
+  spawn: spawnMock
+}))
 
 describe('WSL hook relay guest launcher', () => {
   it('prefers a staged target-native Bun before probing Node', () => {
@@ -36,5 +50,21 @@ describe('WSL hook relay guest launcher', () => {
     )
     expect(script).not.toContain('command -v node')
     expect(script).toContain('exit 43')
+  })
+})
+
+describe('spawnWslRelayProcess', () => {
+  it('names an explicit Windows directory rather than inheriting one', () => {
+    spawnWslRelayProcess('Ubuntu', {}, '1.2.3')
+
+    // Why (#16463): the guest path is inside the `sh -c` command, so the Windows
+    // cwd only decides whether CreateProcessW succeeds. Omitting it inherits
+    // Orca's own — a `\\wsl.localhost` worktree the user can delete, after which
+    // every relay launch fails `spawn wsl.exe ENOENT` for the rest of the session.
+    expect(spawnMock).toHaveBeenCalledWith(
+      'wsl.exe',
+      expect.arrayContaining(['-d', 'Ubuntu', '--exec']),
+      expect.objectContaining({ cwd: expect.any(String) })
+    )
   })
 })
