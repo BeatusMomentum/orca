@@ -196,6 +196,8 @@ export class WslHookRelayManager {
         env,
         bundleJsPath: bundle.jsPath,
         version: bundle.version,
+        bunRuntimePaths: bundle.bunRuntimePaths,
+        requiresBundledBun: bundle.requiresBundledBun,
         io: this.deps,
         // Why the identity half: a hooks-off teardown drops this state and kills its child, but
         // that kill reads as a startup failure and the retry loop would respawn an untracked relay.
@@ -206,7 +208,7 @@ export class WslHookRelayManager {
         onNoNode: () =>
           this.markFailed(
             state,
-            `no node >= 18 found in distro '${state.distro}'; agent hooks stay degraded there`,
+            `no compatible Bun runtime or Node >= 18 found in distro '${state.distro}'; agent hooks stay degraded there`,
             { cooldownBaseMs: NO_NODE_COOLDOWN_MS }
           ),
         onFailure: (message) =>

@@ -22,6 +22,7 @@ import {
 import { RUNTIME_ENVIRONMENT_HANDLER_CHANNELS } from './runtime-environment-handler-channels'
 import { retirePairedRuntimeBrowserClientHostEnvironment } from '../browser/paired-runtime-browser-client-host-runtime'
 import { registerRuntimeEnvironmentBrowserClientHostHandler } from './runtime-environment-browser-client-host-handler'
+import { registerOrcadRuntimeLifecycleHandlers } from './orcad-runtime-lifecycle-handlers'
 
 type RetainedRemoteRuntimeSubscription = RemoteRuntimeSubscription & {
   environmentId: string
@@ -95,6 +96,11 @@ export function registerRuntimeEnvironmentHandlers(store: Store): void {
   })
   registerRuntimeEnvironmentRecoveryHandler()
   registerRuntimeEnvironmentPassiveHandlers(getUserDataPath)
+  registerOrcadRuntimeLifecycleHandlers({
+    getUserDataPath,
+    getActiveEnvironmentId: () => store.getSettings().activeRuntimeEnvironmentId,
+    invalidateTransport: invalidateRuntimeEnvironmentTransport
+  })
   ipcMain.handle(
     'runtimeEnvironments:subscribe',
     async (

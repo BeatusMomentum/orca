@@ -25,6 +25,33 @@ describe('SshPtyProvider', () => {
     expect(provider.canProvideAuthoritativeBufferSnapshot(scopedPty1)).toBe(false)
   })
 
+  it('derives transfer identity from the authenticated owner and tracked incarnation', async () => {
+    const ownerProvider = new SshPtyProvider('conn-1', mux as never, undefined, 1, {
+      getOwnershipTransferOwner: () => ({ ownerLease: 'lease-1', sourceOwnerGeneration: 7 })
+    })
+    mux.request.mockResolvedValueOnce({
+      incarnationId: 'inc-1',
+      sourceActivation: {
+        status: 'pending',
+        clientGeneration: 1,
+        ownerGeneration: 7,
+        ptyIncarnation: 'inc-1',
+        deliveryToken: 'delivery-1',
+        checkpointSourceEndSu: 0,
+        recoveryEndSu: 0
+      }
+    })
+
+    await ownerProvider.attach(scopedPty1)
+
+    expect(ownerProvider.getOwnershipTransferSourceIdentity(scopedPty1)).toEqual({
+      terminalId: 'pty-1',
+      incarnationId: 'inc-1',
+      ownerLease: 'lease-1',
+      sourceOwnerGeneration: 7
+    })
+  })
+
   it('fails closed without foreground-shell proof on direct SSH', () => {
     expect(
       (provider as { confirmShellForeground?: unknown }).confirmShellForeground

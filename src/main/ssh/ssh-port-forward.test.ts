@@ -91,11 +91,19 @@ vi.mock('net', () => {
   return {
     createServer: vi.fn().mockImplementation((connectionHandler) => {
       const listeners = new Map<string, (...args: unknown[]) => void>()
+      let boundPort = 0
       const server = {
-        listen: vi.fn().mockImplementation(() => {
+        listen: vi.fn().mockImplementation((port: number, _host: string, callback?: () => void) => {
+          boundPort = port === 0 ? 41234 : port
           listeners.get('listening')?.()
+          callback?.()
         }),
         close: vi.fn().mockImplementation((cb?: () => void) => cb?.()),
+        address: vi.fn().mockImplementation(() => ({
+          address: '127.0.0.1',
+          family: 'IPv4',
+          port: boundPort
+        })),
         once: vi.fn().mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
           listeners.set(event, handler)
         }),
@@ -132,6 +140,14 @@ describe('SshPortForwardManager', () => {
     expect(entry.id).toBeDefined()
   })
 
+  it('returns the dynamically allocated ssh2 port', async () => {
+    const conn = createMockConn()
+
+    const entry = await manager.addForward('conn-1', conn as never, 0, 'localhost', 8080)
+
+    expect(entry.localPort).toBe(41234)
+  })
+
   it('throws when no port forward provider can handle the connection', async () => {
     const conn = {
       getClient: vi.fn().mockReturnValue(null),
@@ -164,6 +180,23 @@ describe('SshPortForwardManager', () => {
       remotePort: 8080
     })
     expect(manager.listForwards('conn-1')).toHaveLength(1)
+  })
+
+  it('allocates a concrete local port for a system SSH forward', async () => {
+    const forward = createFakeSystemSshForward()
+    startSystemSshPortForwardProcessMock.mockReturnValue(forward)
+    const conn = createSystemSshConn()
+
+    const entry = await manager.addForward('conn-1', conn as never, 0, '127.0.0.1', 8080)
+
+    expect(startSystemSshPortForwardProcessMock).toHaveBeenCalledWith(
+      conn.getTarget(),
+      41234,
+      '127.0.0.1',
+      8080,
+      {}
+    )
+    expect(entry.localPort).toBe(41234)
   })
 
   it('passes resolved OpenSSH config to system SSH port forwards', async () => {

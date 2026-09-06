@@ -32,6 +32,7 @@ import {
   resetSharedControlSupport,
   supportsSharedControl
 } from './runtime-environment-shared-control-support'
+import { ensureOrcadManagedTunnel } from '../ssh/orcad-managed-tunnel'
 
 const DEFAULT_REMOTE_RUNTIME_TIMEOUT_MS = 15_000
 
@@ -42,7 +43,9 @@ export async function getRuntimeEnvironmentStatus(
   selector: string,
   timeoutMs?: number
 ): Promise<RuntimeRpcResponse<RuntimeStatus>> {
-  const environment = resolveEnvironment(userDataPath, selector)
+  let environment = resolveEnvironment(userDataPath, selector)
+  await ensureOrcadManagedTunnel(userDataPath, environment.id)
+  environment = resolveEnvironment(userDataPath, environment.id)
   const pairing = getPreferredPairingOffer(environment)
   let response: RuntimeRpcResponse<RuntimeStatus>
   try {
@@ -110,6 +113,7 @@ export async function callRuntimeEnvironment(
       method,
       async () => {
         const currentEnvironment = resolveEnvironment(userDataPath, environment.id)
+        await ensureOrcadManagedTunnel(userDataPath, currentEnvironment.id)
         const revisionFailure = runtimeEnvironmentRevisionFailure(
           currentEnvironment,
           expectedEnvironmentPairingRevision,
@@ -208,7 +212,9 @@ export async function subscribeRuntimeEnvironment(
     onClose: () => void
   }
 ): Promise<RemoteRuntimeSubscription> {
-  const environment = resolveEnvironment(userDataPath, selector)
+  let environment = resolveEnvironment(userDataPath, selector)
+  await ensureOrcadManagedTunnel(userDataPath, environment.id)
+  environment = resolveEnvironment(userDataPath, environment.id)
   const pairing = getPreferredPairingOffer(environment)
   const effectiveTimeoutMs = timeoutMs ?? DEFAULT_REMOTE_RUNTIME_TIMEOUT_MS
   let markedUsed = false
@@ -302,7 +308,11 @@ function shouldUseOneShotRequest(method: string): boolean {
 }
 
 function shouldKeepDedicatedSubscriptionSocket(method: string): boolean {
-  return method === 'browser.screencast' || method === 'terminal.multiplex'
+  return (
+    method === 'browser.screencast' ||
+    method === 'terminal.multiplex' ||
+    method === 'pty.ownershipTransfer.streamSource'
+  )
 }
 
 function shouldUseSharedControlSubscription(method: string): boolean {

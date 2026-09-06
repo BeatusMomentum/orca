@@ -10,5 +10,13 @@ export const RUNTIME_ENVIRONMENT_HANDLER_CHANNELS = [
   'runtimeEnvironments:getStatus',
   'runtimeEnvironments:call',
   'runtimeEnvironments:subscribe',
-  'runtimeEnvironments:unsubscribe'
+  'runtimeEnvironments:unsubscribe',
+  'runtimeEnvironments:listPendingOrcadMigrations',
+  'runtimeEnvironments:preflightOrcadTarget',
+  'runtimeEnvironments:deployOrcad',
+  'runtimeEnvironments:updateOrcad',
+  'runtimeEnvironments:getOrcadStatus',
+  'runtimeEnvironments:rollbackOrcad',
+  'runtimeEnvironments:recoverOrcad',
+  'runtimeEnvironments:stopOrcad'
 ] as const

@@ -25,7 +25,7 @@ async function syncDirectory(directory: string): Promise<void> {
   }
 }
 
-function syncDirectorySync(directory: string): void {
+export function syncDirectoryDurablySync(directory: string): void {
   let fd: number | null = null
   try {
     fd = openSync(directory, 'r')
@@ -150,7 +150,7 @@ export function writeFileDurableSync(tmpPath: string, finalPath: string, payload
     }
     renameFileWithWindowsRetry(tmpPath, finalPath)
     renamed = true
-    syncDirectorySync(dirname(finalPath))
+    syncDirectoryDurablySync(dirname(finalPath))
   } finally {
     if (!renamed) {
       rmSync(tmpPath, { force: true })

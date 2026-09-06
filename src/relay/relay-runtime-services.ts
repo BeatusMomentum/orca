@@ -19,11 +19,15 @@ import { RelayPtySourcePublication } from './relay-pty-source-publication'
 import { SkillInstallHandler } from './skill-install-handler'
 import { relayLogLine } from './relay-diagnostic-log'
 import { remoteCliRequestTimeoutMs } from './remote-cli-timeout'
+import { adoptDormantRelayPtyOwnershipTransferAdapter } from './relay-pty-ownership-transfer-runtime-adoption'
+import type { RelayPtyOwnershipTransferAdapter } from './relay-pty-ownership-transfer-adapter'
+import { RelayPtyOwnershipTransferFileStore } from './relay-pty-ownership-transfer-file-store'
 
 export class RelayRuntimeServices {
   readonly ptyHandler: PtyHandler
   readonly ptyConsumerSessionAdapter: SshPtyConsumerSessionAdapter
   readonly ptySourcePublication: RelayPtySourcePublication
+  readonly ptyOwnershipTransferAdapter: RelayPtyOwnershipTransferAdapter
   readonly fsHandler: FsHandler
   readonly gitHandler: GitHandler
   readonly skillInstallHandler: SkillInstallHandler
@@ -33,7 +37,12 @@ export class RelayRuntimeServices {
   constructor(
     readonly dispatcher: RelayDispatcher,
     graceTimeMs: number,
-    launchVersion: string
+    launchVersion: string,
+    options: Readonly<{
+      ownershipTransferStoreDirectory?: string
+      /** Test/release-canary opt-in; production remains fail-closed by default. */
+      enableOwnershipTransferMutation?: boolean
+    }> = {}
   ) {
     const context = new RelayContext()
     this.registerSessionHandlers(context)
@@ -50,6 +59,28 @@ export class RelayRuntimeServices {
       (id) => this.ptyHandler.handleSourcePublicationCapacity(id)
     )
     this.ptyHandler.setSourcePublication(this.ptySourcePublication)
+    const ownershipTransferStore = options.ownershipTransferStoreDirectory
+      ? new RelayPtyOwnershipTransferFileStore(options.ownershipTransferStoreDirectory)
+      : undefined
+    // Mutation without an endpoint-local journal would lose ownership state on restart.
+    // Keep the relay read-only unless both the explicit opt-in and durable store are present.
+    const mutationEnabled =
+      options.enableOwnershipTransferMutation === true && ownershipTransferStore !== undefined
+    // A default relay must remain usable even if a stale/corrupt dormant journal is present.
+    // Only the explicit mutation path is allowed to make journal restore a startup requirement.
+    const storeForAdapter = mutationEnabled ? ownershipTransferStore : undefined
+    this.ptyOwnershipTransferAdapter = adoptDormantRelayPtyOwnershipTransferAdapter(
+      this.ptyHandler,
+      this.ptySourcePublication,
+      dispatcher,
+      storeForAdapter
+    )
+    this.ptyHandler.setOwnershipTransferMutationEnabled(mutationEnabled)
+    if (mutationEnabled) {
+      this.ptyOwnershipTransferAdapter.register(dispatcher)
+    } else {
+      this.ptyOwnershipTransferAdapter.registerStatus(dispatcher)
+    }
 
     this.fsHandler = new FsHandler(dispatcher, context)
     const watchRegistry = this.fsHandler.getWatchRegistry()

@@ -4,12 +4,14 @@ const {
   initDaemonPtyProviderMock,
   disconnectDaemonMock,
   shutdownDaemonMock,
+  requestIdleDaemonRetirementMock,
   daemonOwnsFreshPersistentPtysMock,
   readDaemonPidRecordMock
 } = vi.hoisted(() => ({
   initDaemonPtyProviderMock: vi.fn<(signal?: unknown, options?: unknown) => Promise<void>>(),
   disconnectDaemonMock: vi.fn<() => Promise<void>>(),
   shutdownDaemonMock: vi.fn<() => Promise<void>>(),
+  requestIdleDaemonRetirementMock: vi.fn(),
   daemonOwnsFreshPersistentPtysMock: vi.fn<() => boolean>(),
   readDaemonPidRecordMock: vi.fn<() => { pid: number } | null>()
 }))
@@ -21,15 +23,18 @@ vi.mock('../daemon/daemon-init', () => ({
   // orcad shutdown is what would make an orcad restart destructive again.
   shutdownDaemon: shutdownDaemonMock,
   daemonOwnsFreshPersistentPtys: daemonOwnsFreshPersistentPtysMock,
-  readDaemonPidRecord: readDaemonPidRecordMock
+  readDaemonPidRecord: readDaemonPidRecordMock,
+  requestIdleDaemonRetirement: requestIdleDaemonRetirementMock
 }))
 
-const { startOrcadDaemon, stopOrcadDaemon } = await import('./orcad-daemon-supervision')
+const { decommissionOrcadDaemonIfIdle, startOrcadDaemon, stopOrcadDaemon } =
+  await import('./orcad-daemon-supervision')
 
 beforeEach(() => {
   initDaemonPtyProviderMock.mockResolvedValue()
   disconnectDaemonMock.mockResolvedValue()
   shutdownDaemonMock.mockResolvedValue()
+  requestIdleDaemonRetirementMock.mockResolvedValue({ state: 'retiring' })
   daemonOwnsFreshPersistentPtysMock.mockReturnValue(true)
   readDaemonPidRecordMock.mockReturnValue({ pid: 4242 })
   vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -82,4 +87,31 @@ describe('stopOrcadDaemon', () => {
     // outlives it. shutdownDaemon() kills the daemon and every PTY under it.
     expect(shutdownDaemonMock).not.toHaveBeenCalled()
   })
+})
+
+describe('decommissionOrcadDaemonIfIdle', () => {
+  it('accepts only the daemon atomic idle-retirement verdict', async () => {
+    await expect(decommissionOrcadDaemonIfIdle()).resolves.toEqual({ outcome: 'accepted' })
+  })
+
+  it('preserves a live terminal verdict', async () => {
+    requestIdleDaemonRetirementMock.mockResolvedValueOnce({ state: 'busy', liveSessions: 2 })
+
+    await expect(decommissionOrcadDaemonIfIdle()).resolves.toMatchObject({
+      outcome: 'refused',
+      verdict: 'live',
+      code: 'orcad_decommission_live_sessions'
+    })
+  })
+
+  it.each([{ state: 'unverifiable' }, { state: 'unsupported' }])(
+    'does not infer idle from $state daemon state',
+    async (state) => {
+      requestIdleDaemonRetirementMock.mockResolvedValueOnce(state)
+      await expect(decommissionOrcadDaemonIfIdle()).resolves.toMatchObject({
+        outcome: 'refused',
+        verdict: 'unverifiable'
+      })
+    }
+  )
 })

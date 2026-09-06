@@ -26,7 +26,7 @@ export function isMainWindowPtyIpcEvent(
   )
 }
 
-export type PtyWritePayload = { id: string; data: string }
+export type PtyWritePayload = { id: string; data: string; operationId?: string }
 export type PtyViewportClaimPayload = { id: string; cols: number; rows: number }
 
 export function createPtyWriteInput(deps: {
@@ -36,6 +36,7 @@ export function createPtyWriteInput(deps: {
 }): {
   writePtyInput: (args: PtyWritePayload) => boolean | Promise<boolean>
   writePtyInputAccepted: (args: PtyWritePayload) => boolean | Promise<boolean>
+  retirePtyWriteOperation: (args: { id: string; operationId: string }) => boolean | Promise<boolean>
   isPtyWritePayload: (value: unknown) => value is PtyWritePayload
   isPtyViewportClaimPayload: (value: unknown) => value is PtyViewportClaimPayload
   isPtyWriteEventFromMainWindow: (
@@ -60,34 +61,38 @@ export function createPtyWriteInput(deps: {
   const writePtyProviderInputWithinLimit = (
     provider: IPtyProvider,
     id: string,
-    data: string
+    data: string,
+    operationId?: string
   ): boolean | Promise<boolean> => {
     const chunks = iterateTerminalInputChunks(data)
     const first = chunks.next()
     if (first.done) {
-      provider.write(id, data)
+      writeProviderInput(provider, id, data, operationId)
       return true
     }
     const second = chunks.next()
     if (second.done) {
-      provider.write(id, first.value)
+      writeProviderInput(provider, id, first.value, operationId)
       return true
     }
-    return writePtyProviderInputChunks(provider, id, chunks, first.value, second.value)
+    return writePtyProviderInputChunks(provider, id, chunks, first.value, second.value, operationId)
   }
 
   const writePtyProviderInput = (
     provider: IPtyProvider,
     id: string,
-    data: string
+    data: string,
+    operationId?: string
   ): boolean | Promise<boolean> => {
     try {
       const tooLarge = isTerminalInputTooLargeWithDeferredMeasurement(data)
       if (typeof tooLarge === 'boolean') {
-        return tooLarge ? false : writePtyProviderInputWithinLimit(provider, id, data)
+        return tooLarge ? false : writePtyProviderInputWithinLimit(provider, id, data, operationId)
       }
       return tooLarge
-        .then((result) => (result ? false : writePtyProviderInputWithinLimit(provider, id, data)))
+        .then((result) =>
+          result ? false : writePtyProviderInputWithinLimit(provider, id, data, operationId)
+        )
         .catch((error) => {
           reportUnavailablePtyWrite(id, error)
           return false
@@ -103,13 +108,21 @@ export function createPtyWriteInput(deps: {
     id: string,
     chunks: Iterator<string>,
     firstChunk: string,
-    secondChunk: string
+    secondChunk: string,
+    operationId?: string
   ): Promise<boolean> => {
     try {
       let chunk: IteratorResult<string> = { done: false, value: firstChunk }
       let nextChunk: IteratorResult<string> = { done: false, value: secondChunk }
+      let chunkIndex = 0
       while (!chunk.done) {
-        provider.write(id, chunk.value)
+        writeProviderInput(
+          provider,
+          id,
+          chunk.value,
+          operationId ? operationIdForChunk(operationId, chunkIndex) : undefined
+        )
+        chunkIndex += 1
         if (!nextChunk.done) {
           await new Promise((resolve) => setTimeout(resolve, 0))
         }
@@ -128,7 +141,11 @@ export function createPtyWriteInput(deps: {
     value !== null &&
     typeof (value as { id?: unknown }).id === 'string' &&
     (value as { id: string }).id.length > 0 &&
-    typeof (value as { data?: unknown }).data === 'string'
+    typeof (value as { data?: unknown }).data === 'string' &&
+    ((value as { operationId?: unknown }).operationId === undefined ||
+      (typeof (value as { operationId?: unknown }).operationId === 'string' &&
+        (value as { operationId: string }).operationId.length > 0 &&
+        (value as { operationId: string }).operationId.length <= 512))
 
   const isPtyViewportClaimPayload = (value: unknown): value is PtyViewportClaimPayload =>
     typeof value === 'object' &&
@@ -163,7 +180,7 @@ export function createPtyWriteInput(deps: {
       if (visibleRendererPtys.has(args.id)) {
         clearHiddenRendererResizeOutput(args.id)
       }
-      return writePtyProviderInput(provider, args.id, args.data)
+      return writePtyProviderInput(provider, args.id, args.data, args.operationId)
     } catch {
       return false
     }
@@ -188,7 +205,25 @@ export function createPtyWriteInput(deps: {
       if (visibleRendererPtys.has(args.id)) {
         clearHiddenRendererResizeOutput(args.id)
       }
-      return writePtyProviderInput(provider, args.id, args.data)
+      return writePtyProviderInput(provider, args.id, args.data, args.operationId)
+    } catch {
+      return false
+    }
+  }
+
+  const retirePtyWriteOperation = (args: {
+    id: string
+    operationId: string
+  }): boolean | Promise<boolean> => {
+    if (!args.operationId || args.operationId.length > 512) {
+      return false
+    }
+    const provider = tryGetProviderForPty(args.id)
+    if (!provider?.retireWriteOperation) {
+      return false
+    }
+    try {
+      return provider.retireWriteOperation(args.id, args.operationId)
     } catch {
       return false
     }
@@ -197,8 +232,22 @@ export function createPtyWriteInput(deps: {
   return {
     writePtyInput,
     writePtyInputAccepted,
+    retirePtyWriteOperation,
     isPtyWritePayload,
     isPtyViewportClaimPayload,
     isPtyWriteEventFromMainWindow
   }
+}
+
+function operationIdForChunk(operationId: string, index: number): string {
+  return index === 0 ? operationId : `${operationId}:chunk:${index}`
+}
+
+function writeProviderInput(
+  provider: IPtyProvider,
+  id: string,
+  data: string,
+  operationId?: string
+): void | boolean {
+  return operationId ? provider.write(id, data, { operationId }) : provider.write(id, data)
 }

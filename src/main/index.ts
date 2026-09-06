@@ -55,6 +55,7 @@ import {
   registerPaneKeyTeardownListener,
   getLocalPtyProvider,
   getSshPtyProvider,
+  subscribeLocalPtyProviderChanges,
   registerHeadlessPtyRuntime,
   type CodexHomeLaunchContext
 } from './ipc/pty'
@@ -99,6 +100,11 @@ import { initOnboardingCohortClassifier } from './telemetry/onboarding-cohort-cl
 import { resolveConsent } from './telemetry/consent'
 import { triggerStartupNotificationRegistration } from './ipc/startup-notification-registration'
 import { OrcaRuntimeService, type RuntimeWorktreeLifecycleEvent } from './runtime/orca-runtime'
+import {
+  type RuntimePtyOwnershipTransferReadOnlySource,
+  createReconciledRuntimePtyOwnershipTransferReadOnlySource
+} from './providers/runtime-pty-ownership-transfer-read-only-source'
+import { loadOrCreateRuntimeIdentity } from './runtime/runtime-identity'
 import { ArtifactCloudService } from './artifacts/artifact-cloud-service'
 import { SkillCloudService } from './skills/skill-cloud-service'
 import { recoverPendingSkillTransactions } from './skills/skill-transaction-startup-recovery'
@@ -109,8 +115,13 @@ import {
   type OrchestrationEnvironmentTransport
 } from './runtime/orchestration/environment-transport'
 import { callRuntimeEnvironment } from './ipc/runtime-environment-transport-routing'
+import { getRuntimeEnvironmentTransportGeneration } from './ipc/runtime-environment-transport-generation'
 import { resolveEnvironment } from '../shared/runtime-environment-store'
 import { getPreferredPairingOffer } from '../shared/runtime-environments'
+import {
+  createPairedRuntimePtyOwnershipTransferRpc,
+  createPairedRuntimePtyOwnershipTransferSubscription
+} from './runtime/paired-runtime-pty-ownership-transfer-rpc'
 import { OrcaRuntimeRpcServer } from './runtime/runtime-rpc'
 import {
   recordRuntimeRpcStartFailure,
@@ -233,6 +244,7 @@ import { readMiniMaxSessionCookie } from './minimax/minimax-cookie-store'
 import { getInitialClaudeRateLimitTarget } from './rate-limits/claude-rate-limit-target'
 import { getInitialCodexRateLimitTarget } from './rate-limits/codex-rate-limit-target'
 import { getKimiRuntimeTarget, resolveKimiHome } from './kimi/kimi-runtime-home'
+import { isPtyOwnershipTransferMutationEnabled } from '../shared/pty-ownership-transfer-release-gate'
 import { createAccountRuntimeTargetSettingsSync } from './rate-limits/account-runtime-target-sync'
 import {
   attachMainWindowServices,
@@ -2723,13 +2735,63 @@ void app.whenReady().then(async () => {
         envelope
       )
   }
+  const callPairedRuntimePtyOwnershipTransferRpc = createPairedRuntimePtyOwnershipTransferRpc({
+    userDataPath: app.getPath('userData'),
+    callRuntimeEnvironment,
+    resolveEnvironment,
+    getTransportGeneration: getRuntimeEnvironmentTransportGeneration
+  })
+  const subscribePairedRuntimePtyOwnershipTransfer =
+    createPairedRuntimePtyOwnershipTransferSubscription({
+      userDataPath: app.getPath('userData'),
+      resolveEnvironment,
+      getTransportGeneration: getRuntimeEnvironmentTransportGeneration
+    })
+  const runtimeId = loadOrCreateRuntimeIdentity(
+    join(activeOrcaProfile.profileDirectory, 'runtime-identity.json')
+  )
+  let localPtyOwnershipTransferReadOnlySource: RuntimePtyOwnershipTransferReadOnlySource | null =
+    null
+  let unsubscribeLocalPtyOwnershipProviderChanges = (): void => {}
+  try {
+    const binding = await createReconciledRuntimePtyOwnershipTransferReadOnlySource({
+      stateDirectory: join(activeOrcaProfile.profileDirectory, 'pty-ownership-transfer-source'),
+      runtimeId,
+      onError: (error) =>
+        console.warn('[pty-ownership-transfer] local provider reconciliation failed:', error),
+      mutationEnabled: () => isPtyOwnershipTransferMutationEnabled(),
+      authorizeMutationRequest: (method, request, authBinding) =>
+        localPtyOwnershipTransferReadOnlySource?.authorizeMutationRequest(
+          method,
+          request,
+          authBinding
+        ) ?? false,
+      getProvider: getLocalPtyProvider,
+      subscribe: subscribeLocalPtyProviderChanges
+    })
+    localPtyOwnershipTransferReadOnlySource = binding.source
+    unsubscribeLocalPtyOwnershipProviderChanges = binding.unsubscribe
+    app.once('will-quit', () => {
+      unsubscribeLocalPtyOwnershipProviderChanges()
+      binding.source.dispose()
+    })
+  } catch (error) {
+    console.warn('[pty-ownership-transfer] local source state is unavailable:', error)
+  }
   const runtimeService = new OrcaRuntimeService(store, stats, {
+    runtimeId,
     agentSessionClaimSigner: loadAgentSessionClaimSigner(
       getProfileUserDataPath(),
       getProfileUserDataPath()
     ),
     // Why: resolve the PTY provider lazily — a daemon swap happens later, so an eager reference would freeze the pre-daemon provider (design §4.3).
     getLocalProvider: () => getLocalPtyProvider(),
+    getLocalPtyOwnershipTransferReadOnlySource: () => localPtyOwnershipTransferReadOnlySource,
+    getLocalPtyOwnershipTransferSource: () =>
+      localPtyOwnershipTransferReadOnlySource?.getMutationSource() ?? null,
+    ptyOwnershipTransferMutationEnabled: () => isPtyOwnershipTransferMutationEnabled(),
+    callPairedRuntimePtyOwnershipTransferRpc,
+    subscribePairedRuntimePtyOwnershipTransfer,
     // Why: SSH relay providers register after construction and may reconnect, so destructive cleanup must resolve the current generation.
     getSshProvider: (connectionId) => getSshPtyProvider(connectionId),
     onPtyStopped: clearProviderPtyState,
@@ -2778,7 +2840,10 @@ void app.whenReady().then(async () => {
     skillTransactionRecovery
   })
   runtime = runtimeService
+  // Install the durable destination sink before RPC/SSH startup can admit a relay session.
+  runtimeService.installPtyOwnershipTransferDestinationOutputBridge()
   runtimeService.prepareLegacyWorkerTerminalRecovery()
+  runtimeService.recoverPtyOwnershipTransferDestinations()
   // Why before anything can attach: a client host that reattaches to a restarted runtime is only
   // handed its pages back if the runtime found them first.
   runtimeService.rehydrateClientHostedBrowserPages()

@@ -53,7 +53,9 @@ import {
   closeSshPtyOutputGeneration,
   getSshPtyAcceptedSourceCheckpoints,
   installSshPtySourceAckPublisher,
-  installSshPtySourceCancellationPublisher
+  installSshPtySourceCancellationPublisher,
+  settleSshPtyOwnershipTransferOutput,
+  waitForSshPtyOwnershipTransferModelCheckpoints
 } from '../ipc/ssh-pty-output-intake-registry'
 import {
   registerSshFilesystemProvider,
@@ -119,6 +121,7 @@ import type {
 } from '../../shared/pty-source-recovery-contract'
 import { SshPtyRecoveryRetentionBudget } from './ssh-pty-recovery-retention-budget'
 import { SshPtyRetiredSourceDeliveries } from './ssh-pty-retired-source-deliveries'
+import { SshPtyOwnershipTransferOutputDelivery } from './ssh-pty-ownership-transfer-output-delivery'
 import {
   claimSshPtyConsumerRecovery,
   detachSshPtyConsumerRecovery,
@@ -184,7 +187,11 @@ type RemoteCliBridgeEnv = {
   remoteHome: string
   binDir: string
   relayDir: string
-  nodePath: string
+  /** Executable used for relay/CLI commands; Bun in strict mode, Node otherwise. */
+  runtimePath: string
+  runtimeKind: 'node' | 'bun'
+  /** @deprecated Legacy Node-only field retained for mixed-version consumers. */
+  nodePath?: string
   sockPath: string
   credentialFile?: string
   hostPlatform: RemoteHostPlatform
@@ -517,19 +524,25 @@ export class SshRelaySession {
         serverBuildId,
         remoteHome,
         remoteRelayDir,
+        runtimePath,
+        runtimeKind,
         nodePath,
         sockPath,
         credentialFile,
         hostPlatform
       } = await deployAndLaunchRelay(conn, undefined, graceTimeSeconds, this.targetId)
       this.hostPlatform = hostPlatform ?? null
+      const bridgeRuntimePath = runtimePath ?? nodePath
+      const bridgeRuntimeKind = runtimeKind ?? (nodePath ? 'node' : 'bun')
       this.remoteCliBridgeEnv =
-        remoteHome && remoteRelayDir && nodePath && sockPath && hostPlatform
+        remoteHome && remoteRelayDir && bridgeRuntimePath && sockPath && hostPlatform
           ? {
               remoteHome,
               binDir: joinRemotePath(hostPlatform, remoteHome, '.orca-relay', 'bin'),
               relayDir: remoteRelayDir,
-              nodePath,
+              runtimePath: bridgeRuntimePath,
+              runtimeKind: bridgeRuntimeKind,
+              ...(nodePath ? { nodePath } : {}),
               sockPath,
               ...(credentialFile ? { credentialFile } : {}),
               hostPlatform,
@@ -599,6 +612,10 @@ export class SshRelaySession {
       // Why: explicit disconnect keeps PTY ownership, so a later manual connect must reattach those remote PTYs.
       await this.reattachKnownPtys(mux, shouldContinue)
 
+      // Source activation is only authoritative after reattach has completed. Recovering earlier
+      // would often see no lease and silently leave a durable destination route fenced.
+      await this.reconcileDirectSshOwnershipTransfers()
+
       if (!verifyRelayAttempt(mux, isAttemptCurrent, 'PTY reattach')) {
         throw new Error('Session disposed during establish')
       }
@@ -663,19 +680,25 @@ export class SshRelaySession {
         serverBuildId,
         remoteHome,
         remoteRelayDir,
+        runtimePath,
+        runtimeKind,
         nodePath,
         sockPath,
         credentialFile,
         hostPlatform
       } = await deployAndLaunchRelay(conn, undefined, graceTimeSeconds, this.targetId)
       this.hostPlatform = hostPlatform ?? null
+      const bridgeRuntimePath = runtimePath ?? nodePath
+      const bridgeRuntimeKind = runtimeKind ?? (nodePath ? 'node' : 'bun')
       this.remoteCliBridgeEnv =
-        remoteHome && remoteRelayDir && nodePath && sockPath && hostPlatform
+        remoteHome && remoteRelayDir && bridgeRuntimePath && sockPath && hostPlatform
           ? {
               remoteHome,
               binDir: joinRemotePath(hostPlatform, remoteHome, '.orca-relay', 'bin'),
               relayDir: remoteRelayDir,
-              nodePath,
+              runtimePath: bridgeRuntimePath,
+              runtimeKind: bridgeRuntimeKind,
+              ...(nodePath ? { nodePath } : {}),
               sockPath,
               ...(credentialFile ? { credentialFile } : {}),
               hostPlatform,
@@ -753,6 +776,10 @@ export class SshRelaySession {
       }
 
       await this.reattachKnownPtys(mux, shouldContinue)
+
+      // Source activation is only authoritative after reattach has completed. Recovering earlier
+      // would often see no lease and silently leave a durable destination route fenced.
+      await this.reconcileDirectSshOwnershipTransfers()
 
       if (!verifyRelayAttempt(mux, isAttemptCurrent, 'PTY reattach')) {
         return
@@ -963,6 +990,22 @@ export class SshRelaySession {
     this.muxDisposeCleanup = null
   }
 
+  private async reconcileDirectSshOwnershipTransfers(): Promise<void> {
+    try {
+      const runtime = this.runtime
+      if (!runtime) {
+        return
+      }
+      await runtime.recoverPtyOwnershipTransferDestinationsForConnection(this.targetId)
+      await runtime.transferCanaryDirectSshPtysForConnection(this.targetId, { timeoutMs: 10_000 })
+    } catch (error) {
+      console.warn('[ssh-relay-session] direct-SSH ownership reconciliation failed', {
+        targetId: this.targetId,
+        error
+      })
+    }
+  }
+
   // Why: onStateChange only fires on SSH-level reconnects, so watch for relay-channel loss while SSH stays up and fire onRelayLost.
   private watchMuxForRelayLoss(mux: SshChannelMultiplexer): void {
     this.releaseRelayLossWatcher()
@@ -1009,11 +1052,36 @@ export class SshRelaySession {
     this.wireUpRemoteOrcaCli(mux, connectionIncarnation)
 
     const providerGeneration = allocateSshPtyProviderGeneration()
+    const destinationRegistry = this.runtime?.getPtyOwnershipTransferDestinationRegistry?.()
+    const ownershipTransferDelivery = destinationRegistry
+      ? new SshPtyOwnershipTransferOutputDelivery({
+          destination: destinationRegistry,
+          waitForModelCheckpoints: waitForSshPtyOwnershipTransferModelCheckpoints,
+          settleSourceRange: settleSshPtyOwnershipTransferOutput
+        })
+      : null
     const ptyProvider = new SshPtyProvider(
       this.targetId,
       mux,
       this.remoteCliBridgeEnv ?? undefined,
-      providerGeneration
+      providerGeneration,
+      {
+        ...(ownershipTransferDelivery
+          ? { onOwnershipTransferOutput: ownershipTransferDelivery.accept }
+          : {}),
+        getOwnershipTransferOwner: () => {
+          if (this.mux !== mux || this.activePtyProviderGeneration !== providerGeneration) {
+            return null
+          }
+          const owner = this.activePtyConsumerOwner()
+          return owner
+            ? {
+                ownerLease: owner.ownerLease,
+                sourceOwnerGeneration: owner.ownerGeneration
+              }
+            : null
+        }
+      }
     )
     const consumerOwnerState = this.activePtyConsumerOwner()
     if (consumerOwnerState) {

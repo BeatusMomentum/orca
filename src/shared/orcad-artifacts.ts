@@ -8,6 +8,10 @@
  * Keep this file erasable-only TypeScript — build-orcad.mjs imports it directly under
  * Node's type stripping, which rejects enums, namespaces and parameter properties.
  */
+export const ORCAD_BUN_RUNTIME_FILENAME = 'bun-runtime'
+export const ORCAD_BUILD_TARGET_FILENAME = '.build-target'
+export const ORCAD_PARCEL_WATCHER_ENTRY = 'node_modules/@parcel/watcher/index.js'
+export const ORCAD_PARCEL_WATCHER_NATIVE = 'node_modules/@parcel/watcher/watcher.node'
 
 export const ORCAD_VERSION = '0.1.0'
 
@@ -26,11 +30,19 @@ export const ORCAD_ARTIFACTS: readonly OrcadArtifact[] = [
   // Forked so a native @parcel/watcher fault kills the child, not the server.
   { filename: 'parcel-watcher-process-entry.js' },
   // Forked so PTYs outlive the runtime process; its absence makes every restart destructive.
-  { filename: 'daemon-entry.js' }
+  { filename: 'daemon-entry.js' },
+  // Target-specific even when the JavaScript bundle is shared across packaged slots.
+  { filename: ORCAD_BUILD_TARGET_FILENAME },
+  // orcad never depends on a host runtime or host-installed native module.
+  { filename: ORCAD_BUN_RUNTIME_FILENAME },
+  { filename: ORCAD_PARCEL_WATCHER_ENTRY },
+  { filename: ORCAD_PARCEL_WATCHER_NATIVE }
 ]
 
 /** Written after the artifacts, so it is never an input to its own hash. */
 export const ORCAD_VERSION_FILENAME = '.version'
+export const ORCAD_TEMPLATE_MANIFEST_FILENAME = 'orcad-template.json'
+export const ORCAD_TEMPLATE_TARGETS_DIR = 'targets'
 
 /** Written last by the installer; its absence means a torn install. */
 export const ORCAD_INSTALL_COMPLETE_FILENAME = '.install-complete'

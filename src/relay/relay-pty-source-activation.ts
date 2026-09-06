@@ -90,6 +90,15 @@ export function pendingPtySourceRecoveryResult(
   })
 }
 
+export function activePtySourceReceivingActivation(
+  record: RelayPtySourceDeliveryRecord | undefined,
+  clientId: number
+): PtySourceReceivingActivation | undefined {
+  return record?.clientId === clientId && !record.restoreRequired
+    ? record.sourceActivation
+    : undefined
+}
+
 export function samePtySourceRecoveryRequest(
   expected: PtySourceRecoveryCheckpoint,
   received: PtySourceRecoveryRequest | undefined

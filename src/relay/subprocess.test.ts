@@ -11,7 +11,7 @@ import {
 import { rm } from 'node:fs/promises'
 import * as path from 'node:path'
 import { tmpdir } from 'node:os'
-import { execFileSync, spawn as spawnChild } from 'node:child_process'
+import { execFileSync, spawn as spawnChild, spawnSync } from 'node:child_process'
 import { build } from 'esbuild'
 import { spawnRelay, type RelayProcess } from './subprocess-test-utils'
 import { getEndpointFileName } from '../shared/agent-hook-listener/endpoint-publication'
@@ -78,6 +78,9 @@ function spawnRelayEntry(
 function spawn(args: string[] = [], env?: NodeJS.ProcessEnv): RelayProcess {
   return spawnRelayEntry(relayEntry, args, env)
 }
+
+const bunAvailable =
+  process.platform !== 'win32' && spawnSync(process.env.BUN_EXECUTABLE ?? 'bun', ['--version']).status === 0
 
 function waitForChildExit(
   proc: ReturnType<typeof spawnChild>,
@@ -182,6 +185,76 @@ describe('Subprocess: Relay entry point', () => {
     relay = spawn()
     await relay.sentinelReceived
   }, 10_000)
+
+  it.skipIf(!bunAvailable)('runs a PTY through Bun.Terminal when launched by Bun', async () => {
+    const socketDir = mkdtempSync(path.join(tmpdir(), 'relay-bun-sock-'))
+    tmpDir = socketDir
+    const sockPath = relayTestSocketPath(socketDir)
+    const endpointDir = path.join(socketDir, 'agent-hooks')
+    const credentialFile = path.join(socketDir, 'credential')
+    writeFileSync(credentialFile, 'bun-relay-test-credential-0123456789abcdef')
+    relay = spawnRelay(
+      relayEntry,
+      [
+        '--detached',
+        '--grace-time',
+        '30',
+        '--sock-path',
+        sockPath,
+        '--endpoint-dir',
+        endpointDir,
+        '--credential-file',
+        credentialFile
+      ],
+      { runtime: process.env.BUN_EXECUTABLE ?? 'bun' }
+    )
+    let bridge: RelayProcess | null = null
+    try {
+      await relay.sentinelReceived
+      bridge = spawnRelay(
+        relayEntry,
+        ['--connect', '--sock-path', sockPath, '--credential-file', credentialFile]
+      )
+      await bridge.sentinelReceived
+
+      const openClient = bridge.send('pty.openClient', {
+        protocolVersion: 1,
+        clientInstanceId: 'bun-relay-test-client',
+        requestedRole: 'session-owner',
+        capabilities: { outputFlowControl: { versions: [1], requestedWindowSu: 65_536 } }
+      })
+      const grant = await bridge.waitForResponse(openClient)
+      expect(grant.error).toBeUndefined()
+
+      const response = await bridge.waitForResponse(
+        bridge.send('pty.spawn', { cols: 80, rows: 24 })
+      )
+      expect(response.error).toBeUndefined()
+      const id = (response.result as { id: string }).id
+      const marker = `ORCA_BUN_RELAY_${Date.now()}`
+      // Submit a complete command; a PTY in canonical mode otherwise buffers it forever.
+      bridge.sendNotification('pty.data', { id, data: `printf '${marker}\\n'\n` })
+      const deadline = Date.now() + 10_000
+      let markerSeen = false
+      while (Date.now() < deadline) {
+        const output = await bridge.waitForNotification(
+          'pty.data',
+          Math.max(100, deadline - Date.now())
+        )
+        if (JSON.stringify(output.params).includes(marker)) {
+          markerSeen = true
+          break
+        }
+      }
+      expect(markerSeen).toBe(true)
+
+      const status = await bridge.waitForResponse(bridge.send('relay.status'))
+      expect(status.result).toMatchObject({ runtimeKind: 'bun', ptyBackend: 'bun-terminal' })
+    } finally {
+      bridge?.kill('SIGTERM')
+      await bridge?.waitForExit().catch(() => {})
+    }
+  }, 20_000)
 
   it('keeps the Node-18 relay bundle free of unsupported array copy methods', () => {
     expect(readFileSync(relayEntry, 'utf8')).not.toContain('.toReversed(')
@@ -767,11 +840,15 @@ describe('Subprocess: Relay entry point', () => {
     const resp = await relay.waitForResponse(id)
     expect(resp.error).toBeUndefined()
     const status = resp.result as {
+      runtimeKind: string
+      ptyBackend: string
       pid: number
       memory: { rss: number }
       ptys: { active: number }
       socket: { owned: boolean; listening: boolean; clients: number }
     }
+    expect(status.runtimeKind).toBe('node')
+    expect(status.ptyBackend).toBe('node-pty')
     expect(status.pid).toBeGreaterThan(0)
     expect(status.memory.rss).toBeGreaterThan(0)
     expect(status.ptys.active).toBe(0)

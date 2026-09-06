@@ -32,6 +32,12 @@ type ConptyNative = {
   assignCurrentProcessToJob: () => boolean
 }
 
+type SelfOwnedPty = IPty & {
+  jobRootProcessIsWrapper?: true
+  terminateOwnedTree?: () => JobTerminationOutcome
+  listOwnedProcessIds?: () => readonly number[] | null
+}
+
 let cachedNative: ConptyNative | null | undefined
 let nativeLoader: () => ConptyNative | null = loadConptyNative
 
@@ -88,6 +94,10 @@ export type JobTerminationOutcome = 'terminated' | 'unavailable'
  * to be misread as "nothing to kill".
  */
 export function terminatePtyJob(proc: IPty): JobTerminationOutcome {
+  const selfOwned = proc as SelfOwnedPty
+  if (typeof selfOwned.terminateOwnedTree === 'function') {
+    return selfOwned.terminateOwnedTree()
+  }
   const target = ptyJobTarget(proc)
   const native = nativeLoader()
   if (!target || !native) {
@@ -115,6 +125,10 @@ export function terminatePtyJob(proc: IPty): JobTerminationOutcome {
  * including children that detached from the console.
  */
 export function listPtyJobProcessIds(proc: IPty): readonly number[] | null {
+  const selfOwned = proc as SelfOwnedPty
+  if (typeof selfOwned.listOwnedProcessIds === 'function') {
+    return selfOwned.listOwnedProcessIds()
+  }
   const target = ptyJobTarget(proc)
   const native = nativeLoader()
   if (!target || !native) {
@@ -125,6 +139,11 @@ export function listPtyJobProcessIds(proc: IPty): readonly number[] | null {
   } catch {
     return null
   }
+}
+
+/** Whether the reported PTY pid is an ownership gate rather than the user shell. */
+export function ptyJobRootProcessIsWrapper(proc: IPty): boolean {
+  return (proc as SelfOwnedPty).jobRootProcessIsWrapper === true
 }
 
 /**

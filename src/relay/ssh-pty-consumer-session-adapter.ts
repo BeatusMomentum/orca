@@ -208,6 +208,25 @@ export class SshPtyConsumerSessionAdapter {
     return sshPtyDeliveryMode(this.session.activeGrant(String(clientId)))
   }
 
+  activeSessionOwner(
+    clientId: number
+  ): Readonly<{ ownerGeneration: number; ownerLease: string }> | null {
+    const grant = this.session.activeGrant(String(clientId))
+    const ownerGeneration = grant?.ownerGeneration
+    if (
+      grant?.role !== 'session-owner' ||
+      typeof ownerGeneration !== 'number' ||
+      !Number.isSafeInteger(ownerGeneration) ||
+      !grant.ownerLease
+    ) {
+      return null
+    }
+    return Object.freeze({
+      ownerGeneration,
+      ownerLease: grant.ownerLease
+    })
+  }
+
   private async openClient(
     rawParams: Record<string, unknown>,
     context: RequestContext

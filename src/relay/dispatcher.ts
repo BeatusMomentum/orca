@@ -44,6 +44,8 @@ export type {
 
 export type RequestContext = {
   clientId: number
+  /** Monotonic transport generation for this client socket.  Optional for in-process callers. */
+  transportGeneration?: number
   isStale: () => boolean
   signal?: AbortSignal
   sessionIdentity?: RelayClientSessionIdentity
@@ -1016,6 +1018,7 @@ export class RelayDispatcher {
     }
     const context: RequestContext = {
       clientId: client.id,
+      transportGeneration: gen,
       isStale: () =>
         client.generation !== gen || !this.clients.has(client.id) || abortController.signal.aborted,
       signal: abortController.signal,
@@ -1086,6 +1089,7 @@ export class RelayDispatcher {
       const gen = client.generation
       handler(notif.params ?? {}, {
         clientId: client.id,
+        transportGeneration: gen,
         isStale: () => client.generation !== gen || !this.clients.has(client.id),
         sessionIdentity: client.sessionIdentity,
         onResponseSettled: () => {

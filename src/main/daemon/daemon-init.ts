@@ -20,13 +20,15 @@ import {
 import { DAEMON_EXIT_ENDPOINT_OCCUPIED } from './daemon-endpoint-ownership'
 import { DaemonPtyAdapter } from './daemon-pty-adapter'
 import type { DaemonRespawnReason } from './daemon-pty-runtime-state'
+import type { DaemonIdleRetirementResult } from './daemon-pty-runtime-state'
 import { DaemonPtyRouter } from './daemon-pty-router'
 import { DaemonClient } from './client'
 import {
   CLEAN_DISCONNECT_PROTOCOL_VERSION,
   PREVIOUS_DAEMON_PROTOCOL_VERSIONS,
   PROTOCOL_VERSION,
-  type ListSessionsResult
+  type ListSessionsResult,
+  type SessionInfo
 } from './types'
 import { getMacDaemonSystemResolverHealth, checkDaemonHealth } from './daemon-health'
 import {
@@ -1163,6 +1165,40 @@ export async function listLiveDaemonPtyIds(): Promise<string[] | null> {
   return inventories.flatMap((inventory) =>
     inventory.status === 'fulfilled' ? inventory.value.map((process) => process.id) : []
   )
+}
+
+/** Returns null unless every daemon generation supplied an authoritative session inventory. */
+export async function listLiveDaemonSessions(): Promise<SessionInfo[] | null> {
+  if (!adapter) {
+    return null
+  }
+  const adapters =
+    adapter instanceof DaemonPtyRouter || adapter instanceof DegradedDaemonPtyProvider
+      ? adapter.getAllAdapters()
+      : [adapter]
+  const inventories = await Promise.allSettled(
+    adapters.map((daemonAdapter) => daemonAdapter.listSessions())
+  )
+  if (inventories.some((inventory) => inventory.status === 'rejected')) {
+    return null
+  }
+  return inventories.flatMap((inventory) =>
+    inventory.status === 'fulfilled' ? inventory.value : []
+  )
+}
+
+/** Atomically fence new daemon terminals and retire only an idle, single-generation daemon. */
+export async function requestIdleDaemonRetirement(): Promise<DaemonIdleRetirementResult> {
+  if (!adapter) {
+    return { state: 'unverifiable' }
+  }
+  if (adapter instanceof DegradedDaemonPtyProvider) {
+    return { state: 'unverifiable' }
+  }
+  if (adapter instanceof DaemonPtyRouter) {
+    return adapter.requestIdleRetirement()
+  }
+  return adapter.requestIdleRetirement()
 }
 
 // Why: keep the module-level adapter and ipc/pty.ts's localProvider in sync so app-quit can't dispose a stale reference.

@@ -22,6 +22,7 @@ describe('relay launch options', () => {
         'node',
         'relay.js',
         '--detached',
+        '--enable-ownership-transfer-mutation',
         '--connect',
         '--grace-time',
         '17',
@@ -39,6 +40,7 @@ describe('relay launch options', () => {
       connectMode: true,
       detached: true,
       cliMode: false,
+      enableOwnershipTransferMutation: true,
       sockPath: 'relay-endpoint',
       endpointDir: 'hooks',
       logFile: 'relay.log',
@@ -51,6 +53,12 @@ describe('relay launch options', () => {
       parseRelayLaunchOptions(['node', 'relay.js', '--grace-time', '0', '--grace-time', '-1'])
         .graceTimeMs
     ).toBe(0)
+  })
+
+  it('keeps ownership-transfer mutation disabled unless explicitly requested', () => {
+    expect(parseRelayLaunchOptions(['node', 'relay.js']).enableOwnershipTransferMutation).toBe(
+      false
+    )
   })
 
   it('validates and restricts the endpoint credential file', () => {

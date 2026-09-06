@@ -28,6 +28,9 @@ import {
 export function createRuntimeEnvironmentsApi(): NonNullable<
   Partial<PreloadApi>['runtimeEnvironments']
 > {
+  const desktopOnlyOrcad = (): never => {
+    throw new Error('Managed Orca server deployment is only available in the desktop app.')
+  }
   return {
     list: async () => {
       const environment = requireActiveEnvironmentOrNull()
@@ -154,6 +157,14 @@ export function createRuntimeEnvironmentsApi(): NonNullable<
     },
     resolve: async ({ selector }) =>
       redactStoredWebRuntimeEnvironment(resolveEnvironment(selector)),
+    listPendingOrcadMigrations: async () => desktopOnlyOrcad(),
+    preflightOrcadTarget: async () => desktopOnlyOrcad(),
+    deployOrcad: async () => desktopOnlyOrcad(),
+    updateOrcad: async () => desktopOnlyOrcad(),
+    getOrcadStatus: async () => desktopOnlyOrcad(),
+    rollbackOrcad: async () => desktopOnlyOrcad(),
+    recoverOrcad: async () => desktopOnlyOrcad(),
+    stopOrcad: async () => desktopOnlyOrcad(),
     remove: async ({ selector }) => {
       const environment = resolveEnvironment(selector)
       if (webRuntimeState.activeEnvironment?.id === environment.id) {

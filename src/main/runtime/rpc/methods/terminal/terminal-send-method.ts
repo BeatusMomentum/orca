@@ -168,7 +168,8 @@ export const TERMINAL_SEND_METHODS: RpcAnyMethod[] = [
         result = useSettledAgentPrompt
           ? await runtime.sendTerminalAgentPrompt(params.terminal, params.text!, {
               beforeWrite,
-              signal
+              signal,
+              ...(params.operationId ? { operationId: params.operationId } : {})
             })
           : await runtime.sendTerminal(
               params.terminal,
@@ -180,6 +181,7 @@ export const TERMINAL_SEND_METHODS: RpcAnyMethod[] = [
               {
                 beforeWrite,
                 signal,
+                ...(params.operationId ? { operationId: params.operationId } : {}),
                 ...(reserveWrite ? { reserveWrite } : {}),
                 ...(params.inputKind !== 'query-reply' && mobileFloorClientId
                   ? { afterWrite: () => commitMobileInputFloorClaim(mobileFloorClaim) }

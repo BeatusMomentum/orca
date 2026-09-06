@@ -1,5 +1,8 @@
 import type { SshRelaySession } from '../ssh/ssh-relay-session'
-import { setSshActiveMultiplexerResolver } from '../ssh/ssh-target-registry'
+import {
+  setDirectSshAuthorityResolver,
+  setSshActiveMultiplexerResolver
+} from '../ssh/ssh-target-registry'
 
 // One session per SSH target owns the whole relay lifecycle (mux, providers, abort controller, state machine).
 export const activeSessions = new Map<string, SshRelaySession>()
@@ -9,3 +12,4 @@ export const activeSessions = new Map<string, SshRelaySession>()
 setSshActiveMultiplexerResolver(
   (connectionId) => activeSessions.get(connectionId)?.getMux() ?? undefined
 )
+setDirectSshAuthorityResolver((targetId) => activeSessions.has(targetId))

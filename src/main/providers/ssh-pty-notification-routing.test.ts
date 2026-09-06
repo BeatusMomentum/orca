@@ -7,7 +7,9 @@ type MockMux = {
   request: ReturnType<typeof vi.fn>
 }
 
-function createSubscription() {
+function createSubscription(
+  onOwnershipTransferOutput?: (payload: { data: string; source?: unknown }) => void
+) {
   const mux: MockMux = {
     onNotification: vi.fn(),
     request: vi.fn(async () => ({ canceled: true, sentEndSu: 0, creditedEndSu: 0 }))
@@ -30,7 +32,8 @@ function createSubscription() {
     recordExit,
     providerGeneration: 7,
     resolvePtyIncarnation,
-    peekPtyIncarnation: () => undefined
+    peekPtyIncarnation: () => undefined,
+    ...(onOwnershipTransferOutput ? { onOwnershipTransferOutput } : {})
   })
 
   const handler = mux.onNotification.mock.calls[0]?.[0] as (
@@ -100,6 +103,55 @@ describe('subscribeSshPtyNotifications', () => {
       sequenceChars: 5,
       seq: 9
     })
+  })
+
+  it('routes ownership-transfer output metadata without changing legacy delivery', () => {
+    const onOwnershipTransferOutput = vi.fn()
+    const { handler, dataListeners, installReceivingActivation } =
+      createSubscription(onOwnershipTransferOutput)
+    const onData = vi.fn()
+    dataListeners.add(onData)
+    installReceivingActivation('pty-1', sourceActivation()).commit()
+
+    const baseEnvelope = {
+      bridgeId: 'bridge-1',
+      terminalId: 'pty-1',
+      incarnationId: 'incarnation-1',
+      ownerLease: 'lease-1',
+      sourceOwnerGeneration: 3,
+      destinationRuntimeId: 'runtime-1',
+      version: 1,
+      frameSeq: 1,
+      frameLengthSu: 4
+    }
+    handler('pty.data', {
+      id: 'pty-1',
+      data: 'ab',
+      ptyIncarnation: 'incarnation-1',
+      deliveryToken: 'token-1',
+      clientGeneration: 2,
+      ownerGeneration: 3,
+      sourceEndSu: 2,
+      sourceLengthSu: 2,
+      ownershipTransfer: { ...baseEnvelope, fragmentStartSu: 0, fragmentEndSu: 2 }
+    })
+    handler('pty.data', {
+      id: 'pty-1',
+      data: 'cd',
+      ptyIncarnation: 'incarnation-1',
+      deliveryToken: 'token-1',
+      clientGeneration: 2,
+      ownerGeneration: 3,
+      sourceEndSu: 4,
+      sourceLengthSu: 2,
+      ownershipTransfer: { ...baseEnvelope, fragmentStartSu: 2, fragmentEndSu: 4 }
+    })
+
+    expect(onOwnershipTransferOutput).toHaveBeenCalledTimes(2)
+    expect(onOwnershipTransferOutput).toHaveBeenLastCalledWith(
+      expect.objectContaining({ data: 'cd' })
+    )
+    expect(onData).toHaveBeenCalledTimes(2)
   })
 
   it('records pty.exit with the validated relay id', () => {
@@ -190,6 +242,95 @@ describe('subscribeSshPtyNotifications', () => {
       ownerGeneration: 3,
       deliveryToken: 'token-1'
     })
+  })
+
+  it('accepts a valid ownership-transfer envelope and rejects an invalid fragment', () => {
+    const { handler, dataListeners, installReceivingActivation, mux } = createSubscription()
+    const onData = vi.fn()
+    dataListeners.add(onData)
+    installReceivingActivation('pty-1', sourceActivation({ recoveryEndSu: 4 })).commit()
+
+    const ownershipTransfer = {
+      bridgeId: 'bridge-1',
+      terminalId: 'pty-1',
+      incarnationId: 'incarnation-1',
+      ownerLease: 'lease-1',
+      sourceOwnerGeneration: 3,
+      destinationRuntimeId: 'runtime-1',
+      version: 1,
+      frameSeq: 11,
+      fragmentStartSu: 0,
+      fragmentEndSu: 4,
+      frameLengthSu: 4
+    }
+    handler('pty.data', {
+      id: 'pty-1',
+      data: 'data',
+      ptyIncarnation: 'incarnation-1',
+      deliveryToken: 'token-1',
+      clientGeneration: 2,
+      ownerGeneration: 3,
+      sourceEndSu: 4,
+      sourceLengthSu: 4,
+      ownershipTransfer
+    })
+    expect(onData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: expect.objectContaining({
+          ownershipTransfer: expect.objectContaining({ frameSeq: 11 })
+        })
+      })
+    )
+
+    handler('pty.data', {
+      id: 'pty-1',
+      data: 'x',
+      ptyIncarnation: 'incarnation-1',
+      deliveryToken: 'token-1',
+      clientGeneration: 2,
+      ownerGeneration: 3,
+      sourceEndSu: 5,
+      sourceLengthSu: 1,
+      ownershipTransfer: {
+        ...ownershipTransfer,
+        fragmentStartSu: 0,
+        fragmentEndSu: 1
+      }
+    })
+    expect(onData).toHaveBeenCalledTimes(1)
+
+    handler('pty.data', {
+      id: 'pty-1',
+      data: 'bad',
+      ptyIncarnation: 'incarnation-1',
+      deliveryToken: 'token-1',
+      clientGeneration: 2,
+      ownerGeneration: 3,
+      sourceEndSu: 7,
+      sourceLengthSu: 3,
+      ownershipTransfer: { ...ownershipTransfer, fragmentEndSu: 4 }
+    })
+    expect(onData).toHaveBeenCalledTimes(1)
+    expect(mux.request).toHaveBeenCalledWith('pty.cancelDelivery', expect.anything())
+
+    handler('pty.data', {
+      id: 'pty-1',
+      data: 'x',
+      ptyIncarnation: 'incarnation-1',
+      deliveryToken: 'token-1',
+      clientGeneration: 2,
+      ownerGeneration: 3,
+      sourceEndSu: 5,
+      sourceLengthSu: 1,
+      ownershipTransfer: {
+        ...ownershipTransfer,
+        bridgeId: 'bridge-other',
+        fragmentStartSu: 0,
+        fragmentEndSu: 1,
+        frameLengthSu: 1
+      }
+    })
+    expect(onData).toHaveBeenCalledTimes(1)
   })
 
   it('keeps exact source incarnation independent without mutating legacy delivery state', () => {

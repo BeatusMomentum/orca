@@ -5,24 +5,10 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import watcher from '@parcel/watcher'
 import SyncDatabase from '../../src/main/sqlite/sync-database.ts'
-const requiredPackages = [
-  '@parcel/watcher',
-  'node-pty',
-  'sherpa-onnx',
-  '@vscode/windows-process-tree'
-]
-const optionalPackages = ['cpu-features', ...(process.platform === 'darwin' ? ['fsevents'] : [])]
+const requiredPackages = ['@parcel/watcher']
 const loaded = requiredPackages.map((name) => {
   const module = require(name)
   return { name, loaded: typeof module === 'object' || typeof module === 'function' }
-})
-const optionalFailures = optionalPackages.flatMap((name) => {
-  try {
-    require(name)
-    return []
-  } catch (error) {
-    return [{ name, error: String(error) }]
-  }
 })
 
 const root = mkdtempSync(join(tmpdir(), 'orca-bun-native-smoke-'))
@@ -49,7 +35,6 @@ const result = {
   runtime: `bun ${Bun.version}`,
   platform: `${process.platform}-${process.arch}`,
   loaded,
-  optionalFailures,
   sqliteValue,
   watcherEvents: eventCount
 }

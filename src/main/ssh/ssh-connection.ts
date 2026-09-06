@@ -4,6 +4,7 @@ import { Client as SshClient } from 'ssh2'
 import type { ChildProcess } from 'node:child_process'
 import type { ClientChannel, ConnectConfig, SFTPWrapper } from 'ssh2'
 import type { SshTarget, SshConnectionState, SshConnectionStatus } from '../../shared/ssh-types'
+import { isEphemeralRuntimeSshOwner } from '../../shared/managed-orcad-ssh-owner'
 import {
   getOrcaControlSocketPath,
   spawnSystemSsh,
@@ -206,6 +207,9 @@ export class SshConnection {
 
   getState(): SshConnectionState {
     return { ...this.state }
+  }
+  getTransportGeneration(): number {
+    return this.connectGeneration
   }
   getClient(): SshClient | null {
     return this.client
@@ -1378,7 +1382,7 @@ export class SshConnection {
         hostKeyStoreFile: boundSshHostKeyStoreFile() ?? undefined,
         strictHostKeyChecking: hostKeyResolved?.strictHostKeyChecking ?? 'ask',
         isHostKeyAlias,
-        isEphemeralRuntimeTarget: this.target.owner?.type === 'on-demand-runtime',
+        isEphemeralRuntimeTarget: isEphemeralRuntimeSshOwner(this.target.owner),
         siteConfigSuppressed,
         // A file that EXISTS and will not open is the absence of evidence, not evidence of a new
         // host — the entry that would have said "this key changed" may be in it. An ABSENT file is

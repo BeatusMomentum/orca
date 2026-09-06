@@ -9,7 +9,9 @@ vi.mock('electron', () => ({
 // the local relay package as existing AND return a content-hashed version
 // string so readLocalFullVersion succeeds.
 vi.mock('fs', () => ({
-  existsSync: vi.fn().mockReturnValue(true),
+  // Legacy relay fixtures intentionally omit bundled Bun; strict-mode tests
+  // opt in by marking the target-native companion present.
+  existsSync: vi.fn((path: string) => !/bun-runtime(?:-|$)/u.test(path)),
   readFileSync: vi.fn().mockReturnValue('0.1.0+abcdef012345')
 }))
 
@@ -56,6 +58,12 @@ vi.mock('./ssh-relay-endpoint-credential', () => ({
   writeRelayEndpointCredential: vi.fn().mockResolvedValue(undefined)
 }))
 
+vi.mock('./orcad-remote-target-detection', () => ({
+  detectRemoteOrcadTarget: vi.fn((_, host) =>
+    Promise.resolve(host.os === 'win32' ? 'win32-x64' : 'linux-x64-glibc')
+  )
+}))
+
 // Why: the versioned-install modules shell out for install state, locking,
 // and GC. Stub them so deploy tests need no real SSH connection.
 vi.mock('./ssh-relay-versioned-install', () => ({
@@ -85,8 +93,10 @@ vi.mock('./ssh-connection-utils', () => ({
 }))
 
 import { deployAndLaunchRelay } from './ssh-relay-deploy'
+import { existsSync, readFileSync } from 'node:fs'
 import { execCommand, waitForSentinel } from './ssh-relay-deploy-helpers'
 import { resolveRemoteNodePath } from './ssh-remote-node-resolution'
+import { detectRemoteOrcadTarget } from './orcad-remote-target-detection'
 import { isRelayAlreadyInstalled } from './ssh-relay-versioned-install'
 import { acquireInstallLock } from './ssh-relay-install-lock'
 import * as DeployTiming from './ssh-relay-deploy-timing'
@@ -150,6 +160,12 @@ describe('deployAndLaunchRelay', () => {
     vi.mocked(resolveRemoteNodePath).mockReset().mockResolvedValue('/usr/bin/node')
     vi.mocked(isRelayAlreadyInstalled).mockReset().mockResolvedValue(true)
     vi.mocked(acquireInstallLock).mockReset().mockResolvedValue(undefined)
+    vi.mocked(existsSync).mockImplementation((path) => !/bun-runtime(?:-|$)/u.test(String(path)))
+    vi.mocked(readFileSync)
+      .mockReset()
+      .mockImplementation((path) =>
+        String(path).endsWith('.bun-required') ? 'legacy\n' : '0.1.0+abcdef012345'
+      )
   })
 
   it('calls exec to detect remote platform', async () => {
@@ -219,6 +235,106 @@ describe('deployAndLaunchRelay', () => {
     await deployAndLaunchRelay(conn)
 
     expect(resolveRemoteNodePath).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses target-native Bun without probing remote Node or npm', async () => {
+    const conn = makeMockConnection()
+    vi.mocked(readFileSync).mockImplementation((path) =>
+      String(path).endsWith('.bun-required') ? 'bun\n' : '0.1.0+abcdef012345'
+    )
+    vi.mocked(existsSync).mockImplementation((path) => {
+      const pathname = String(path)
+      if (pathname.endsWith('bun-runtime-glibc')) {
+        return true
+      }
+      return !/bun-runtime(?:-|$)/u.test(pathname)
+    })
+    const mockExecCommand = vi.mocked(execCommand)
+    mockExecCommand.mockResolvedValueOnce('__ORCA_REMOTE_PLATFORM__ Linux x86_64')
+    mockExecCommand.mockResolvedValueOnce('/home/user')
+    mockExecCommand.mockResolvedValueOnce('READY') // strict Bun runtime verification
+    mockExecCommand.mockResolvedValueOnce('DEAD')
+    mockExecCommand.mockResolvedValueOnce('')
+    mockExecCommand.mockResolvedValueOnce('READY')
+
+    const result = await deployAndLaunchRelay(conn)
+
+    expect(detectRemoteOrcadTarget).toHaveBeenCalledTimes(1)
+    expect(result.runtimeKind).toBe('bun')
+    expect(result.runtimePath).toContain('bun-runtime-glibc')
+    expect(result.nodePath).toBeUndefined()
+    expect(resolveRemoteNodePath).not.toHaveBeenCalled()
+    const commands = [
+      ...mockExecCommand.mock.calls.map(([command]) => command),
+      ...vi.mocked(conn.exec).mock.calls.map(([command]) => command as string)
+    ].filter((command): command is string => typeof command === 'string')
+    expect(commands.some((command) => command.includes('bun-runtime-glibc'))).toBe(true)
+    expect(commands.some((command) => /(?:^|[^A-Za-z])node(?:[^A-Za-z]|$)/u.test(command))).toBe(
+      false
+    )
+    expect(commands.some((command) => /\bnpm\b/u.test(command))).toBe(false)
+  })
+
+  it('uses bundled Bun for Windows probes and launch without host Node', async () => {
+    const conn = makeMockConnection()
+    vi.mocked(readFileSync).mockImplementation((path) =>
+      String(path).endsWith('.bun-required') ? 'bun\n' : '0.1.0+abcdef012345'
+    )
+    vi.mocked(existsSync).mockImplementation((path) => {
+      const pathname = String(path)
+      if (pathname.endsWith('bun-runtime')) {
+        return true
+      }
+      return !/bun-runtime(?:-|$)/u.test(pathname)
+    })
+    const mockExecCommand = vi.mocked(execCommand)
+    mockExecCommand.mockResolvedValueOnce('__ORCA_REMOTE_PLATFORM__ Windows AMD64')
+    mockExecCommand.mockResolvedValueOnce('C:/Users/me user')
+    mockExecCommand.mockResolvedValueOnce('READY') // strict Bun runtime verification
+    mockExecCommand.mockResolvedValueOnce('') // strict Bun runtime verification
+    mockExecCommand.mockResolvedValueOnce('') // active-pipe marker
+    mockExecCommand.mockResolvedValueOnce('WAITING') // existing pipe probe
+    mockExecCommand.mockResolvedValueOnce('') // credential write
+    mockExecCommand.mockResolvedValueOnce('READY') // launch wait
+
+    const result = await deployAndLaunchRelay(conn)
+
+    expect(result.runtimeKind).toBe('bun')
+    expect(result.runtimePath).toContain('bun-runtime')
+    expect(result.nodePath).toBeUndefined()
+    expect(resolveRemoteNodePath).not.toHaveBeenCalled()
+    const commands = [
+      ...mockExecCommand.mock.calls.map(([command]) => command),
+      ...vi.mocked(conn.exec).mock.calls.map(([command]) => command)
+    ]
+      .filter((command): command is string => typeof command === 'string')
+      .map((command) => decodePowerShellCommand(command) ?? command)
+    expect(commands.some((command) => command.includes('bun-runtime'))).toBe(true)
+    expect(commands.some((command) => /\bnpm\b/u.test(command))).toBe(false)
+    expect(commands.some((command) => /(?:^|[^A-Za-z])node(?:[^A-Za-z]|$)/u.test(command))).toBe(
+      false
+    )
+  })
+
+  it('fails closed when a libc-specific bundle has no matching remote target', async () => {
+    const conn = makeMockConnection()
+    vi.mocked(readFileSync).mockImplementation((path) =>
+      String(path).endsWith('.bun-required') ? 'bun\n' : '0.1.0+abcdef012345'
+    )
+    vi.mocked(existsSync).mockImplementation((path) => {
+      const pathname = String(path)
+      if (pathname.endsWith('bun-runtime-glibc')) {
+        return true
+      }
+      return !/bun-runtime(?:-|$)/u.test(pathname)
+    })
+    vi.mocked(detectRemoteOrcadTarget).mockResolvedValueOnce('linux-arm64-musl')
+    vi.mocked(execCommand).mockResolvedValueOnce('__ORCA_REMOTE_PLATFORM__ Linux x86_64')
+
+    await expect(deployAndLaunchRelay(conn)).rejects.toThrow(
+      'Relay package has no Bun runtime for remote target linux-arm64-musl'
+    )
+    expect(resolveRemoteNodePath).not.toHaveBeenCalled()
   })
 
   it('resolves node concurrently with remote home, not after the install-state chain', async () => {
@@ -500,8 +616,30 @@ describe('deployAndLaunchRelay', () => {
       .find((cmd) => cmd.includes('--detached'))
 
     expect(launchCommand).toContain(`--grace-time ${DEFAULT_SSH_RELAY_GRACE_PERIOD_SECONDS}`)
+    expect(launchCommand).not.toContain('--enable-ownership-transfer-mutation')
     expect(launchCommand).not.toContain('--pty-source-credit-v1')
     expect(launchCommand).not.toContain('.pty-source-credit-policy')
+  })
+
+  it('adds the ownership-transfer mutation flag only for an explicit canary launch', async () => {
+    const conn = makeMockConnection()
+    const mockExecCommand = vi.mocked(execCommand)
+    mockExecCommand.mockResolvedValueOnce('__ORCA_REMOTE_PLATFORM__ Linux x86_64')
+    mockExecCommand.mockResolvedValueOnce('/home/user')
+    mockExecCommand.mockResolvedValueOnce('ORCA-NATIVE-DEPS-OK')
+    queueLaunchNamespaceAndDeadSocketProbe()
+    mockExecCommand.mockResolvedValueOnce('READY')
+
+    await deployAndLaunchRelay(conn, undefined, 300, 'target-a', {
+      enableOwnershipTransferMutation: true
+    })
+
+    const launchCommand = vi
+      .mocked(conn.exec)
+      .mock.calls.map(([cmd]) => cmd as string)
+      .find((cmd) => cmd.includes('--detached'))
+
+    expect(launchCommand).toContain('--enable-ownership-transfer-mutation')
   })
 
   it('allows an unlimited SSH disconnect grace window', async () => {
@@ -781,6 +919,7 @@ describe('deployAndLaunchRelay', () => {
     expect(launchScript).toContain('--endpoint-dir')
     expect(launchScript).not.toContain('--pty-source-credit-v1')
     expect(launchScript).not.toContain('.pty-source-credit-policy')
+    expect(launchScript).not.toContain('--enable-ownership-transfer-mutation')
     expect(launchScript).not.toContain('\\\\.\\pipe\\agent-hooks')
     const waitScript = decodedScripts.find((script) => script.includes('deadline=Date.now()')) ?? ''
     expect(waitScript).toContain('setTimeout(attempt,intervalMs)')
@@ -798,6 +937,32 @@ describe('deployAndLaunchRelay', () => {
     ).toBe(true)
     expect(vi.mocked(conn.exec).mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal)
     expect(vi.mocked(waitForSentinel).mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal)
+  })
+
+  it('adds the ownership-transfer mutation flag to an opted-in Windows launch', async () => {
+    const conn = makeMockConnection()
+    const mockExecCommand = vi.mocked(execCommand)
+    vi.mocked(resolveRemoteNodePath).mockResolvedValue('C:/Program Files/nodejs/node.exe')
+    mockExecCommand
+      .mockRejectedValueOnce(new Error('uname not found'))
+      .mockResolvedValueOnce('__ORCA_REMOTE_PLATFORM__ Windows X64')
+      .mockResolvedValueOnce('C:\\Users\\me user')
+      .mockResolvedValueOnce('ORCA-NATIVE-DEPS-OK')
+      .mockResolvedValueOnce('')
+      .mockResolvedValueOnce('WAITING')
+      .mockResolvedValueOnce('')
+      .mockResolvedValueOnce('READY')
+      .mockResolvedValueOnce('')
+
+    await deployAndLaunchRelay(conn, undefined, 300, 'target-a', {
+      enableOwnershipTransferMutation: true
+    })
+
+    const decodedScripts = mockExecCommand.mock.calls
+      .map(([, command]) => decodePowerShellCommand(command))
+      .filter((script): script is string => script !== null)
+    const launchScript = decodedScripts.find((script) => script.includes('Invoke-CimMethod')) ?? ''
+    expect(launchScript).toContain('--enable-ownership-transfer-mutation')
   })
 
   it('relaunches Windows remotes on a fallback pipe when reconnecting the occupied pipe fails', async () => {

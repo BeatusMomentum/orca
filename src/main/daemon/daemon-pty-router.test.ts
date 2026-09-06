@@ -71,6 +71,8 @@ function createAdapter(
         title: label
       }))
     ),
+    listSessions: vi.fn(async () => sessions.map((sessionId) => ({ sessionId, isAlive: true }))),
+    requestIdleRetirement: vi.fn(async () => ({ state: 'retiring' as const })),
     hasPty: vi.fn((id: string) => sessions.includes(id)),
     probePtyLiveness: vi.fn(async (id: string) => sessions.includes(id)),
     write: vi.fn((id: string, data: string) => {
@@ -244,6 +246,80 @@ it('forwards the owning legacy daemon sequence from attach', async () => {
 })
 
 describe('DaemonPtyRouter', () => {
+  it('advertises runtime-owned transfer framing without enabling live mutation', async () => {
+    const router = new DaemonPtyRouter({
+      current: createAdapter('current', [], undefined, PROTOCOL_VERSION),
+      legacy: []
+    })
+
+    await expect(router.getOwnershipBridgeCapabilities()).resolves.toEqual({
+      protocolVersions: [1],
+      maxReplayBytes: 128 * 1024,
+      maxInputIds: 4_096,
+      inputDeduplication: true,
+      rollback: true,
+      liveTransfer: false
+    })
+  })
+
+  describe('idle retirement', () => {
+    it('retires every empty daemon generation and fences subsequent spawns', async () => {
+      const current = createAdapter('current', [], undefined, PROTOCOL_VERSION)
+      const legacy = createAdapter('legacy', [], undefined, PROTOCOL_VERSION)
+      const router = new DaemonPtyRouter({ current, legacy: [legacy] })
+
+      await expect(router.requestIdleRetirement()).resolves.toEqual({ state: 'retiring' })
+      expect(current.requestIdleRetirement).toHaveBeenCalledOnce()
+      expect(legacy.requestIdleRetirement).toHaveBeenCalledOnce()
+      await expect(router.spawn({ sessionId: 'late', cols: 80, rows: 24 })).rejects.toThrow(
+        'Terminal daemon is decommissioning'
+      )
+    })
+
+    it('reports live inventory before retiring any generation and reopens admission', async () => {
+      const current = createAdapter('current', [], undefined, PROTOCOL_VERSION)
+      const legacy = createAdapter('legacy', ['legacy-live'], undefined, PROTOCOL_VERSION)
+      const router = new DaemonPtyRouter({ current, legacy: [legacy] })
+
+      await expect(router.requestIdleRetirement()).resolves.toEqual({
+        state: 'busy',
+        liveSessions: 1
+      })
+      expect(current.requestIdleRetirement).not.toHaveBeenCalled()
+      expect(legacy.requestIdleRetirement).not.toHaveBeenCalled()
+      await expect(
+        router.spawn({ sessionId: 'after-refusal', cols: 80, rows: 24 })
+      ).resolves.toEqual({
+        id: 'after-refusal'
+      })
+    })
+
+    it('does not partially retire when a generation predates clean idle shutdown', async () => {
+      const current = createAdapter('current', [], undefined, PROTOCOL_VERSION)
+      const legacy = createAdapter('legacy', [], undefined, 23)
+      const router = new DaemonPtyRouter({ current, legacy: [legacy] })
+
+      await expect(router.requestIdleRetirement()).resolves.toEqual({ state: 'unsupported' })
+      expect(current.requestIdleRetirement).not.toHaveBeenCalled()
+      expect(legacy.requestIdleRetirement).not.toHaveBeenCalled()
+    })
+
+    it('keeps admission fenced after a partial multi-generation retirement', async () => {
+      const current = createAdapter('current', [], undefined, PROTOCOL_VERSION)
+      const legacy = createAdapter('legacy', [], undefined, PROTOCOL_VERSION)
+      vi.mocked(legacy.requestIdleRetirement).mockResolvedValueOnce({
+        state: 'busy',
+        liveSessions: 0
+      })
+      const router = new DaemonPtyRouter({ current, legacy: [legacy] })
+
+      await expect(router.requestIdleRetirement()).resolves.toEqual({ state: 'unverifiable' })
+      await expect(router.spawn({ sessionId: 'unsafe', cols: 80, rows: 24 })).rejects.toThrow(
+        'Terminal daemon is decommissioning'
+      )
+    })
+  })
+
   it('reports separate conservative resume and fresh-create boundaries', () => {
     const current = createAdapter(
       'current',

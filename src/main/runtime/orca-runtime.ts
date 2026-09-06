@@ -27,6 +27,7 @@ import type { AgentStatus } from '../../shared/agent-detection'
 import type { TerminalOscLinkRange } from '../../shared/terminal-osc-link-ranges'
 import type { TerminalOscColorQueryReplyColors } from '../../shared/terminal-osc-color-reply'
 import type { TerminalOutputSourceRange } from '../../shared/terminal-output-source-range'
+import type { PtyOwnershipTransferOutputEnvelope } from '../../shared/pty-ownership-transfer-output-envelope'
 import type {
   RemoteTerminalSourceRangeConsumerHooks,
   RemoteTerminalSourceRangeReplacementPublication,
@@ -150,6 +151,75 @@ import {
   createSetupCompletionScanner
 } from './orchestration/setup-completion-signal'
 import type { RuntimeOrchestrationEnvelope } from '../../shared/runtime-rpc-envelope'
+import type {
+  OrcadMigrationCatalogAbortResult,
+  OrcadMigrationCatalogState,
+  OrcadMigrationImportResult,
+  OrcadMigrationManifest
+} from '../../shared/orcad-migration-manifest'
+import type {
+  OrcadMigrationSnapshotChunkRequest,
+  OrcadMigrationSnapshotChunkResult
+} from '../../shared/orcad-migration-scrollback'
+import { samePtyOwnershipTransferPublicationReceipt } from '../../shared/pty-ownership-transfer-receipt-validation'
+import {
+  abortStagedOrcadMigrationCatalogDurably,
+  commitStagedOrcadMigrationCatalogDurably,
+  getOrcadMigrationCatalogState,
+  importOrcadMigrationCatalogDurably,
+  stageOrcadMigrationCatalogDurably
+} from './orcad-migration-catalog-import'
+import {
+  PtyOwnershipTransferOrchestrator,
+  type RuntimeOwnedPtyOwnershipTransferReadOnlySource
+} from './pty-ownership-transfer-orchestration'
+import {
+  PtyOwnershipTransferDestinationRuntimeRegistry,
+  type PtyOwnershipTransferDestinationRuntimeOptions
+} from '../persistence/pty-ownership-transfer/pty-ownership-transfer-destination-runtime'
+import type { PtyOwnershipTransferDestinationRecoveryCandidate } from '../persistence/pty-ownership-transfer/pty-ownership-transfer-destination-recovery-candidates'
+import {
+  PtyOwnershipTransferCoordinator,
+  type PtyOwnershipTransferCoordinatorOptions,
+  type PtyOwnershipTransferSource
+} from '../persistence/pty-ownership-transfer/pty-ownership-transfer-coordinator'
+import {
+  PTY_OWNERSHIP_TRANSFER_WIRE_VERSION,
+  parsePtyOwnershipTransferWireIdentity,
+  type PtyOwnershipTransferOutputFrame,
+  type PtyOwnershipTransferStatusResult,
+  type PtyOwnershipTransferWireIdentity
+} from '../../shared/pty-ownership-transfer-wire'
+import type { PtyOwnershipBridgeCapabilities } from '../../shared/pty-ownership-bridge-contract'
+import type {
+  PtyOwnershipTransferDestinationAdapterOptions,
+  PtyOwnershipTransferDestinationSnapshot
+} from '../../shared/pty-ownership-transfer-destination-adapter'
+import type {
+  PtyOwnershipTransferExecuteRequest,
+  PtyOwnershipTransferExecuteResult,
+  PtyOwnershipTransferPreflightRequest,
+  PtyOwnershipTransferPreflightResult,
+  PtyOwnershipTransferStatusProbeRequest
+} from '../../shared/pty-ownership-transfer-orchestration'
+import {
+  parsePtyOwnershipTransferSurfaceBinding,
+  samePtyOwnershipTransferSurfaceBinding,
+  type PtyOwnershipTransferSurfaceBinding
+} from '../../shared/pty-ownership-transfer-surface-binding'
+import { validatePtyOwnershipTransferDestinationOutputRoute } from './pty-ownership-transfer-destination-output-admission'
+import type { PtyOwnershipTransferTerminalModelCheckpointRequest } from '../persistence/loading-store/pty-ownership-transfer-surface-persistence'
+import type { RuntimePtyOwnershipTransferSourceAdapter } from '../providers/runtime-pty-ownership-transfer-source-adapter'
+import type { RuntimePtyOwnershipTransferAttachmentBinding } from '../providers/runtime-pty-ownership-transfer-source-adapter'
+import {
+  parsePtyOwnershipTransferSourceGrant,
+  PTY_OWNERSHIP_TRANSFER_SOURCE_GRANT_VERSION,
+  samePtyOwnershipTransferSourceGrant,
+  type PtyOwnershipTransferSourceGrant,
+  type PtyOwnershipTransferSourceGrantRequest
+} from '../../shared/pty-ownership-transfer-source-grant'
+import { PairedRuntimePtyOwnershipTransferClient } from './paired-runtime-pty-ownership-transfer-client'
+import type { SubscribePairedRuntimePtyOwnershipTransfer } from './paired-runtime-pty-ownership-transfer-rpc'
 import type {
   ArtifactCloudOperation,
   ArtifactCloudOptions,
@@ -563,7 +633,8 @@ import {
   parseLegacyNumericPaneKey,
   parsePaneKey
 } from '../../shared/stable-pane-id'
-import { parseAppSshPtyId } from '../../shared/ssh-pty-id'
+import { parseAppSshPtyId, toAppSshPtyId } from '../../shared/ssh-pty-id'
+import { parseRemoteRuntimePtyId } from '../../shared/remote-runtime-pty-id'
 import { getPtyExecutionHost } from '../../shared/terminal-execution-host'
 import { isValidHostTerminalTabId, isValidTerminalTabId } from '../../shared/terminal-tab-id'
 import { isWslHookRelayConnectionId } from '../../shared/wsl-hook-relay-contract'
@@ -771,6 +842,7 @@ import type {
   PtySpawnResult,
   PtyTransientFact
 } from '../providers/types'
+import type { PtyProviderOperationRetry } from '../providers/pty-provider-contract'
 import { ClaudeAgentTeamsService } from './claude-agent-teams-service'
 import type {
   AgentTeamsTmuxCompatRequest,
@@ -1220,6 +1292,7 @@ import {
   type ReplayableMobileNotification
 } from './mobile-notification-replay'
 import { MOBILE_SUBSCRIBE_SCROLLBACK_ROWS } from './scrollback-limits'
+import { normalizeDesktopTerminalScrollbackRows } from '../../shared/terminal-scrollback-policy'
 import {
   createMobileSessionTabsNotifyCoalescer,
   type MobileSessionTabsNotifyCoalescer
@@ -1366,8 +1439,19 @@ type RuntimeStore = {
   getWorkspaceSession?: Store['getWorkspaceSession']
   getWorkspaceSessionHostIds?: Store['getWorkspaceSessionHostIds']
   setWorkspaceSession?: Store['setWorkspaceSession']
+  /** Optional to preserve lightweight runtime stores without a profile. */
+  getProfileStorageDirectory?: Store['getProfileStorageDirectory']
+  inspectPtyOwnershipTransferSurface?: Store['inspectPtyOwnershipTransferSurface']
+  publishPtyOwnershipTransferSurface?: Store['publishPtyOwnershipTransferSurface']
+  checkpointPtyOwnershipTransferTerminalModel?: Store['checkpointPtyOwnershipTransferTerminalModel']
   flushOrThrow?: Store['flushOrThrow']
   flushPendingOrThrowAsync?: Store['flushPendingOrThrowAsync']
+  abortStagedOrcadMigrationCatalog?: Store['abortStagedOrcadMigrationCatalog']
+  commitStagedOrcadMigrationCatalog?: Store['commitStagedOrcadMigrationCatalog']
+  getOrcadMigrationCatalogState?: Store['getOrcadMigrationCatalogState']
+  importOrcadMigrationCatalog?: Store['importOrcadMigrationCatalog']
+  stageOrcadMigrationCatalog?: Store['stageOrcadMigrationCatalog']
+  stageOrcadMigrationSnapshotChunk?: Store['stageOrcadMigrationSnapshotChunk']
   persistPtyBinding?: Store['persistPtyBinding']
   getSshRemotePtyLeases?: Store['getSshRemotePtyLeases']
   getUI?: Store['getUI']
@@ -1417,6 +1501,7 @@ type RuntimeStore = {
     agentSkillSharingEnabled?: GlobalSettings['agentSkillSharingEnabled']
     nestedWorkerMaxDepth?: GlobalSettings['nestedWorkerMaxDepth']
     terminalQuickCommands?: GlobalSettings['terminalQuickCommands']
+    terminalScrollbackRows?: GlobalSettings['terminalScrollbackRows']
     gitlabProjects?: GlobalSettings['gitlabProjects']
     mobileAutoRestoreFitMs?: number | null
     mobileEmulatorEnabled?: boolean
@@ -1875,6 +1960,36 @@ export type RuntimePtyDataAdmission = Readonly<{
   completion: Promise<void>
 }>
 
+export type RuntimePtyOwnershipTransferModelCheckpoint = Readonly<{
+  ptyId: string
+  ptyIncarnation: string
+  modelSequenceEnd: number
+  projectionSequenceEnd: number
+  ownershipTransfer: PtyOwnershipTransferOutputEnvelope
+  /** Exact fragment bytes admitted to the authoritative model. */
+  data: string
+}>
+
+type PtyOwnershipTransferModelCheckpointFragment = Readonly<{
+  identity: PtyOwnershipTransferWireIdentity
+  surfaceBinding: PtyOwnershipTransferSurfaceBinding
+  ptyId: string
+  frameSeq: number
+  fragmentStartSu: number
+  fragmentEndSu: number
+  frameLengthSu: number
+  data: string
+  modelSequenceEnd: number
+}>
+
+type PtyOwnershipTransferModelCheckpointFrame = {
+  identity: PtyOwnershipTransferWireIdentity
+  surfaceBinding: PtyOwnershipTransferSurfaceBinding
+  ptyId: string
+  frameLengthSu: number
+  fragments: Map<number, PtyOwnershipTransferModelCheckpointFragment>
+}
+
 // Why: a subscription id is stable across reconnects, so holding the string is not
 // proof of ownership. This handle is the only safe way to tear down a registration.
 export type SubscriptionRegistration = Readonly<{
@@ -2010,8 +2125,12 @@ type RuntimePtyController = {
     stablePaneOwner?: { handle: string; tabId: string; leafId: string }
     agentSessionEnsure?: AgentSessionClaimedSpawnResult
   }>
-  write(ptyId: string, data: string): boolean
-  writeWithSettlement?(ptyId: string, data: string): Promise<boolean>
+  write(ptyId: string, data: string, retry?: PtyProviderOperationRetry): boolean
+  writeWithSettlement?(
+    ptyId: string,
+    data: string,
+    retry?: PtyProviderOperationRetry
+  ): Promise<boolean>
   /** Attach-only adoption of a live local daemon session so its output streams
    *  to main without a renderer pane; never creates, resizes, or focuses.
    *  False on doubt (absent session, SSH-scoped id, non-daemon provider). */
@@ -2102,6 +2221,19 @@ type WorktreeStartupFollowup = {
   prompt: string
 }
 
+type TerminalSendOperationRecord = Readonly<{
+  incarnationId: string
+  payloadFingerprint: string
+  bytesWritten: number
+  expiresAt: number
+}>
+
+type TerminalSendOperationInFlight = Readonly<{
+  incarnationId: string
+  payloadFingerprint: string
+  promise: Promise<number>
+}>
+
 function getAgentLaunchPlatformForRepo(
   repo: Pick<Repo, 'connectionId' | 'path'>,
   projectRuntime?: ProjectExecutionRuntimeResolution
@@ -2139,6 +2271,10 @@ const AGENT_PROMPT_RENDER_TIMEOUT_MS = 8000
 const AGENT_PROMPT_RENDER_QUIET_MS = 1500
 // Why: Claude and Codex emit show-cursor after accepting bracketed paste.
 const AGENT_PROMPT_RENDER_MARKER = '\x1b[?25h'
+// Why: a lost terminal.send reply may be retried after the transport reconnects; retain a
+// bounded, short-lived receipt so an accepted PTY write is never applied twice.
+const TERMINAL_SEND_OPERATION_TTL_MS = 15 * 60_000
+const TERMINAL_SEND_OPERATION_MAX_PER_PTY = 256
 
 function assertAgentPromptRequestActive(signal?: AbortSignal): void {
   if (signal?.aborted) {
@@ -3118,6 +3254,51 @@ export type RuntimeRendererReloadFence = Readonly<{
   recovery: 'renderer' | 'headless' | 'reloading'
 }>
 
+export function createPtyOwnershipTransferDestinationRegistry(
+  store: RuntimeStore | null,
+  runtimeId: string,
+  publishPostCommitOutput:
+    | PtyOwnershipTransferDestinationRuntimeOptions['publishPostCommitOutput']
+    | undefined,
+  publishPostCommitOutputAcknowledged?: PtyOwnershipTransferDestinationRuntimeOptions['publishPostCommitOutputAcknowledged']
+): PtyOwnershipTransferDestinationRuntimeRegistry | null {
+  if (
+    !store ||
+    !publishPostCommitOutput ||
+    !publishPostCommitOutputAcknowledged ||
+    typeof store.getProfileStorageDirectory !== 'function' ||
+    typeof store.inspectPtyOwnershipTransferSurface !== 'function' ||
+    typeof store.publishPtyOwnershipTransferSurface !== 'function'
+  ) {
+    return null
+  }
+  try {
+    return new PtyOwnershipTransferDestinationRuntimeRegistry({
+      runtimeId,
+      store: store as PtyOwnershipTransferDestinationRuntimeOptions['store'],
+      publishPostCommitOutput,
+      publishPostCommitOutputAcknowledged
+    })
+  } catch {
+    // A bad optional transfer sink must not prevent runtime startup.
+    return null
+  }
+}
+
+function samePtyOwnershipTransferIdentity(
+  left: PtyOwnershipTransferWireIdentity,
+  right: PtyOwnershipTransferWireIdentity
+): boolean {
+  return (
+    left.bridgeId === right.bridgeId &&
+    left.terminalId === right.terminalId &&
+    left.incarnationId === right.incarnationId &&
+    left.ownerLease === right.ownerLease &&
+    left.sourceOwnerGeneration === right.sourceOwnerGeneration &&
+    left.destinationRuntimeId === right.destinationRuntimeId
+  )
+}
+
 /** How a caller wants the provider-held screen fetched when the runtime has no
  *  bytes of its own. `visibleScreenOnly` narrows the result to the current grid:
  *  scrollback can still hold a ready banner a working agent printed minutes ago,
@@ -3129,7 +3310,7 @@ type ProviderSnapshotReadOptions = {
 }
 
 export class OrcaRuntimeService {
-  private readonly runtimeId = randomUUID()
+  private readonly runtimeId: string
   private readonly startedAt = Date.now()
   private readonly store: RuntimeStore | null
   private managedHookReconciliationGeneration = 0
@@ -3309,6 +3490,14 @@ export class OrcaRuntimeService {
   private ptyForegroundAgentRefreshes = new Map<string, PtyForegroundAgentRefresh>()
   private ptyForegroundProcessReads = new Map<string, PtyForegroundProcessReadEntry>()
   private ptyDelayedForegroundSnapshotTitleObservations = new Map<string, number>()
+  private readonly terminalSendOperationsByPtyId = new Map<
+    string,
+    Map<string, TerminalSendOperationRecord>
+  >()
+  private readonly terminalSendOperationsInFlightByPtyId = new Map<
+    string,
+    Map<string, TerminalSendOperationInFlight>
+  >()
   // Why a set and not a timer: the intent is retired by the exit it explains, or
   // by the next lifecycle generation on that id (advancePtyLifecycleGeneration),
   // so a stop that never produced an exit cannot outlive its process.
@@ -3752,6 +3941,35 @@ export class OrcaRuntimeService {
   private preservedBranchCleanupByScope = new Map<string, PreservedBranchCleanupTarget>()
   private readonly getLocalProviderFn: (() => IPtyProvider) | null
   private readonly getSshProviderFn: ((connectionId: string) => IPtyProvider | undefined) | null
+  /** Runtime-owned release gate; coordinator construction fails closed by default. */
+  private readonly ptyOwnershipTransferMutationEnabled: () => boolean
+  private readonly getLocalPtyOwnershipTransferSourceFn:
+    | (() => RuntimePtyOwnershipTransferSourceAdapter | null)
+    | null
+  private readonly getLocalPtyOwnershipTransferReadOnlySourceFn:
+    | (() => RuntimeOwnedPtyOwnershipTransferReadOnlySource | null)
+    | null
+  private readonly subscribePairedRuntimePtyOwnershipTransferFn: SubscribePairedRuntimePtyOwnershipTransfer | null
+  private readonly callPairedRuntimePtyOwnershipTransferRpcFn:
+    | ((
+        environmentId: string,
+        method: string,
+        params: unknown,
+        options?: { timeoutMs?: number; signal?: AbortSignal }
+      ) => Promise<unknown>)
+    | null
+  private readonly ptyOwnershipTransferOrchestrator: PtyOwnershipTransferOrchestrator
+  /** Destination-owned durable sink for direct-SSH post-commit output. */
+  private ptyOwnershipTransferDestinationRegistry: PtyOwnershipTransferDestinationRuntimeRegistry | null
+  private readonly ptyOwnershipTransferModelCheckpointsByBridge = new Map<
+    string,
+    Map<number, PtyOwnershipTransferModelCheckpointFrame>
+  >()
+  /** Coalesces one bounded startup recovery pass per SSH connection generation. */
+  private readonly ptyOwnershipTransferRecoveryByConnection = new Map<
+    string,
+    Promise<readonly PtyOwnershipTransferDestinationSnapshot[]>
+  >()
   private readonly onPtyStopped: ((ptyId: string) => void) | null
   private readonly onTerminalAgentStatus: ((event: RuntimeTerminalAgentStatusEvent) => void) | null
   private readonly onTerminalSideEffects: ((batch: TerminalSideEffectBatch) => void) | null
@@ -3834,6 +4052,8 @@ export class OrcaRuntimeService {
     store: RuntimeStore | null = null,
     stats?: StatsCollector,
     deps?: {
+      /** Stable profile-scoped identity; tests may omit it for an ephemeral runtime. */
+      runtimeId?: string
       getLocalProvider?: () => IPtyProvider
       getSshProvider?: (connectionId: string) => IPtyProvider | undefined
       onPtyStopped?: (ptyId: string) => void
@@ -3871,11 +4091,30 @@ export class OrcaRuntimeService {
       ) => Promise<AiVaultPrepareSessionResumeResult>
       buildAgentHookPtyEnv?: () => Record<string, string>
       getDesktopWindowStatus?: () => RuntimeDesktopWindowStatus
+      /** Destination-owned durable sink for frames emitted after source commit. */
+      publishPtyOwnershipTransferPostCommitOutput?: PtyOwnershipTransferDestinationAdapterOptions['publishPostCommitOutput']
+      /** Strict destination acknowledgement for post-commit frames. */
+      publishPtyOwnershipTransferPostCommitOutputAcknowledged?: PtyOwnershipTransferDestinationRuntimeOptions['publishPostCommitOutputAcknowledged']
+      /** Test/release-canary opt-in; production leaves this unset. */
+      ptyOwnershipTransferMutationEnabled?: () => boolean
+      /** Host-local durable source status; deliberately excludes mutation methods. */
+      getLocalPtyOwnershipTransferReadOnlySource?: () => RuntimeOwnedPtyOwnershipTransferReadOnlySource | null
+      /** Authenticated paired-runtime source bridge; mutation remains gate-controlled. */
+      getLocalPtyOwnershipTransferSource?: () => RuntimePtyOwnershipTransferSourceAdapter | null
+      subscribePairedRuntimePtyOwnershipTransfer?: SubscribePairedRuntimePtyOwnershipTransfer
+      /** Read-only probe bridge for PTYs owned by an independently paired runtime. */
+      callPairedRuntimePtyOwnershipTransferRpc?: (
+        environmentId: string,
+        method: string,
+        params: unknown,
+        options?: { timeoutMs?: number; signal?: AbortSignal }
+      ) => Promise<unknown>
       agentSessionClaimSigner?: AgentSessionClaimSigner
       orchestrationEnvironmentTransport?: OrchestrationEnvironmentTransport
       skillTransactionRecovery?: Promise<unknown>
     }
   ) {
+    this.runtimeId = deps?.runtimeId ?? randomUUID()
     this.store = store
     // Why: per-device tab selections must survive host restarts, or every phone snaps back to the first tab on return.
     const persistedClientTabSelections = store?.getMobileClientTabSelections?.()
@@ -3924,6 +4163,41 @@ export class OrcaRuntimeService {
     // provider (design §4.3 wire-up).
     this.getLocalProviderFn = deps?.getLocalProvider ?? null
     this.getSshProviderFn = deps?.getSshProvider ?? null
+    this.ptyOwnershipTransferMutationEnabled =
+      deps?.ptyOwnershipTransferMutationEnabled ?? (() => false)
+    this.getLocalPtyOwnershipTransferSourceFn = deps?.getLocalPtyOwnershipTransferSource ?? null
+    this.getLocalPtyOwnershipTransferReadOnlySourceFn =
+      deps?.getLocalPtyOwnershipTransferReadOnlySource ?? null
+    this.subscribePairedRuntimePtyOwnershipTransferFn =
+      deps?.subscribePairedRuntimePtyOwnershipTransfer ?? null
+    this.callPairedRuntimePtyOwnershipTransferRpcFn =
+      deps?.callPairedRuntimePtyOwnershipTransferRpc ?? null
+    this.ptyOwnershipTransferDestinationRegistry = createPtyOwnershipTransferDestinationRegistry(
+      store,
+      this.runtimeId,
+      deps?.publishPtyOwnershipTransferPostCommitOutput,
+      deps?.publishPtyOwnershipTransferPostCommitOutputAcknowledged
+    )
+    try {
+      this.ptyOwnershipTransferDestinationRegistry?.recoverPersistedAdapters()
+    } catch (error) {
+      // Keep malformed or prior-runtime journals durable and leave ownership unverifiable.
+      console.warn('[pty-ownership-transfer] destination recovery hydration unavailable:', error)
+    }
+    this.ptyOwnershipTransferOrchestrator = new PtyOwnershipTransferOrchestrator({
+      runtimeId: this.runtimeId,
+      getSshProvider: (connectionId) => this.getSshProviderFn?.(connectionId),
+      getLocalProvider: () => this.getLocalProvider(),
+      getLocalReadOnlySource: () => this.getLocalPtyOwnershipTransferReadOnlySourceFn?.() ?? null,
+      hasDestinationAdapter: () => this.ptyOwnershipTransferDestinationRegistry !== null,
+      // Production mutation gate stays closed until end-to-end recovery evidence exists.
+      mutationEnabled: () => this.ptyOwnershipTransferMutationEnabled(),
+      callPairedRuntimeRpc: deps?.callPairedRuntimePtyOwnershipTransferRpc,
+      inspectPty: (ptyId) => {
+        const pty = this.ptysById.get(ptyId)
+        return pty ? { connectionId: pty.connectionId, incarnationId: pty.incarnationId } : null
+      }
+    })
     this.onPtyStopped = deps?.onPtyStopped ?? null
     this.onTerminalAgentStatus = deps?.onTerminalAgentStatus ?? null
     this.buildAgentHookPtyEnv = deps?.buildAgentHookPtyEnv ?? null
@@ -3964,6 +4238,18 @@ export class OrcaRuntimeService {
     try {
       const registry = getRuntimeBrowserPageRegistry(this)
       const liveRepoIds = new Set((this.store.getRepos?.() ?? []).map((repo) => repo.id))
+      const browserWorkspaceOwners = new Map<string, string | null>()
+      for (const session of this.listWorkspaceSessionPartitions()) {
+        for (const [ownerKey, workspaces] of Object.entries(session.browserTabsByWorktree ?? {})) {
+          for (const workspace of workspaces) {
+            const existingOwner = browserWorkspaceOwners.get(workspace.id)
+            browserWorkspaceOwners.set(
+              workspace.id,
+              existingOwner === undefined || existingOwner === ownerKey ? ownerKey : null
+            )
+          }
+        }
+      }
       rehydrateClientHostedBrowserPages(registry, {
         listWorkspaceSessions: () => this.listWorkspaceSessionPartitions(),
         // Why the same discriminant hydration uses: session keys are `${repoId}::${path}` and are
@@ -3972,6 +4258,16 @@ export class OrcaRuntimeService {
         isKnownWorktree: (worktreeId) => {
           const ownerRepoId = splitWorktreeIdForFilesystem(worktreeId)?.repoId
           return !ownerRepoId || liveRepoIds.has(ownerRepoId)
+        },
+        isKnownBrowserWorkspace: (workspaceId, ownerWorktreeId) => {
+          const mappedOwner = browserWorkspaceOwners.get(workspaceId)
+          // Older session records used the worktree id as the browser workspace id and may not
+          // have a persisted browser-workspace row at all. Preserve that legacy shape while
+          // validating newer rows against the actual browser workspace owner when present.
+          return (
+            mappedOwner === ownerWorktreeId ||
+            (mappedOwner === undefined && workspaceId === ownerWorktreeId)
+          )
         }
       })
       for (const page of registry.listPages()) {
@@ -6077,6 +6373,1068 @@ export class OrcaRuntimeService {
 
   getRuntimeId(): string {
     return this.runtimeId
+  }
+
+  /** Returns the destination registry only when every durable seam was provided. */
+  getPtyOwnershipTransferDestinationRegistry(): PtyOwnershipTransferDestinationRuntimeRegistry | null {
+    return this.ptyOwnershipTransferDestinationRegistry
+  }
+
+  /** Authenticated paired-runtime RPC seam for the host-local source adapter. */
+  getLocalPtyOwnershipTransferSource(): RuntimePtyOwnershipTransferSourceAdapter | null {
+    return this.getLocalPtyOwnershipTransferSourceFn?.() ?? null
+  }
+
+  /** Issues host authority only for the exact local pane named by an authenticated runtime peer. */
+  async issuePairedRuntimePtyOwnershipTransferSourceGrant(
+    request: PtyOwnershipTransferSourceGrantRequest,
+    binding: RuntimePtyOwnershipTransferAttachmentBinding
+  ): Promise<PtyOwnershipTransferSourceGrant> {
+    if (!this.ptyOwnershipTransferMutationEnabled()) {
+      throw new Error('pty_ownership_transfer_production_transfer_disabled')
+    }
+    const source = this.getLocalPtyOwnershipTransferReadOnlySourceFn?.()
+    const provider = this.getLocalProvider()
+    if (!source?.issueOwnershipTransferSourceGrant || !provider) {
+      throw new Error('pty_ownership_transfer_runtime_source_unavailable')
+    }
+    const remote = parseRemoteRuntimePtyId(request.surfaceBinding.ptyId)
+    const workspace = parseWorkspaceKey(request.surfaceBinding.workspaceKey)
+    const tracked = this.ptysById.get(request.terminalId)
+    const expectedWorktreeId =
+      workspace?.type === 'folder'
+        ? folderWorkspaceKey(workspace.folderWorkspaceId)
+        : workspace?.worktreeId
+    if (
+      !remote?.environmentId ||
+      remote.handle !== request.terminalId ||
+      !expectedWorktreeId ||
+      !tracked ||
+      !tracked.connected ||
+      tracked.connectionId !== null ||
+      tracked.worktreeId !== expectedWorktreeId ||
+      tracked.tabId !== request.surfaceBinding.tabId ||
+      tracked.paneKey !== makePaneKey(request.surfaceBinding.tabId, request.surfaceBinding.leafId)
+    ) {
+      throw new Error('pty_ownership_transfer_source_surface_mismatch')
+    }
+    const reconciliation = await source.reconcileProvider(provider)
+    const current = this.ptysById.get(request.terminalId)
+    if (
+      !reconciliation ||
+      typeof reconciliation !== 'object' ||
+      !('state' in reconciliation) ||
+      reconciliation.state !== 'current' ||
+      this.getLocalProvider() !== provider ||
+      current !== tracked ||
+      !current.incarnationId
+    ) {
+      throw new Error('pty_ownership_transfer_source_authority_unavailable')
+    }
+    const grant = source.issueOwnershipTransferSourceGrant(request, binding)
+    if (
+      grant.identity.terminalId !== request.terminalId ||
+      grant.identity.incarnationId !== current.incarnationId ||
+      grant.identity.destinationRuntimeId !== request.destinationRuntimeId ||
+      !samePtyOwnershipTransferSurfaceBinding(grant.surfaceBinding, request.surfaceBinding)
+    ) {
+      throw new Error('pty_ownership_transfer_source_authority_unavailable')
+    }
+    return grant
+  }
+
+  /** Builds a paired-runtime source client when both unary and stream transports are installed. */
+  createPairedRuntimePtyOwnershipTransferSource(
+    environmentId: string
+  ): PairedRuntimePtyOwnershipTransferClient | null {
+    if (
+      !environmentId ||
+      !this.callPairedRuntimePtyOwnershipTransferRpcFn ||
+      !this.subscribePairedRuntimePtyOwnershipTransferFn
+    ) {
+      return null
+    }
+    return new PairedRuntimePtyOwnershipTransferClient(
+      environmentId,
+      this.callPairedRuntimePtyOwnershipTransferRpcFn,
+      this.subscribePairedRuntimePtyOwnershipTransferFn
+    )
+  }
+
+  /** Builds a paired source coordinator without exposing a product mutation caller. */
+  createPairedRuntimePtyOwnershipTransferCoordinator(
+    options: Omit<
+      PtyOwnershipTransferCoordinatorOptions,
+      'source' | 'destination' | 'destinationCapabilities' | 'getDestinationCapabilities'
+    > & { environmentId: string }
+  ): PtyOwnershipTransferCoordinator | null {
+    if (!this.ptyOwnershipTransferMutationEnabled()) {
+      return null
+    }
+    const destination = this.ptyOwnershipTransferDestinationRegistry
+    const { environmentId, ...coordinatorOptions } = options
+    const source = this.createPairedRuntimePtyOwnershipTransferSource(environmentId)
+    if (!destination || !source || options.identity.destinationRuntimeId !== this.runtimeId) {
+      return null
+    }
+    let surfaceBinding: PtyOwnershipTransferSurfaceBinding
+    try {
+      surfaceBinding = parsePtyOwnershipTransferSurfaceBinding(options.surfaceBinding)
+      const remote = parseRemoteRuntimePtyId(surfaceBinding.ptyId)
+      if (
+        !remote?.environmentId ||
+        remote.environmentId !== environmentId ||
+        remote.handle !== options.identity.terminalId
+      ) {
+        return null
+      }
+      validatePtyOwnershipTransferDestinationOutputRoute(
+        {
+          runtimeId: this.runtimeId,
+          inspectPty: (ptyId) => this.ptysById.get(ptyId) ?? null
+        },
+        options.identity,
+        surfaceBinding
+      )
+    } catch {
+      return null
+    }
+    return new PtyOwnershipTransferCoordinator({
+      ...coordinatorOptions,
+      surfaceBinding,
+      source,
+      destination,
+      getDestinationCapabilities: async () => {
+        if (!this.ptyOwnershipTransferMutationEnabled()) {
+          throw new Error('pty_ownership_transfer_production_transfer_disabled')
+        }
+        const preflight = await this.ptyOwnershipTransferOrchestrator.preflight({
+          connectionId: null,
+          ptyId: surfaceBinding.ptyId,
+          destinationRuntimeId: this.runtimeId
+        })
+        if (preflight.topology !== 'paired-runtime-reference' || !preflight.transferSupported) {
+          throw new Error(
+            `pty_ownership_transfer_preflight_blocked:${preflight.blocker ?? 'unknown'}`
+          )
+        }
+        return preflight.capabilities
+      }
+    })
+  }
+
+  /** Executes paired cutover from a host-issued authority grant; mutation stays canary-gated. */
+  async transferPairedRuntimePtyOwnership(
+    request: Readonly<{
+      ptyId: string
+      surfaceBinding: PtyOwnershipTransferSurfaceBinding
+      timeoutMs?: number
+    }>,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<PtyOwnershipTransferExecuteResult> {
+    if (!this.ptyOwnershipTransferMutationEnabled()) {
+      throw new Error('pty_ownership_transfer_production_transfer_disabled')
+    }
+    const surfaceBinding = parsePtyOwnershipTransferSurfaceBinding(request.surfaceBinding)
+    const remote = parseRemoteRuntimePtyId(request.ptyId)
+    const tracked = this.ptysById.get(request.ptyId)
+    if (
+      !remote?.environmentId ||
+      !remote.handle ||
+      surfaceBinding.ptyId !== request.ptyId ||
+      !tracked ||
+      !tracked.connected ||
+      tracked.connectionId !== null ||
+      tracked.tabId !== surfaceBinding.tabId ||
+      tracked.paneKey !== makePaneKey(surfaceBinding.tabId, surfaceBinding.leafId)
+    ) {
+      throw new Error('pty_ownership_transfer_paired_surface_mismatch')
+    }
+    const call = this.callPairedRuntimePtyOwnershipTransferRpcFn
+    if (!call) {
+      throw new Error('pty_ownership_transfer_paired_transport_unavailable')
+    }
+    const grantRequest: PtyOwnershipTransferSourceGrantRequest = Object.freeze({
+      version: PTY_OWNERSHIP_TRANSFER_SOURCE_GRANT_VERSION,
+      terminalId: remote.handle,
+      destinationRuntimeId: this.runtimeId,
+      surfaceBinding
+    })
+    const callGrant = async (): Promise<PtyOwnershipTransferSourceGrant> =>
+      parsePtyOwnershipTransferSourceGrant(
+        await call(
+          remote.environmentId!,
+          'pty.ownershipTransfer.grantSource',
+          grantRequest,
+          {
+            ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+            ...(options.signal === undefined ? {} : { signal: options.signal })
+          }
+        )
+      )
+    const grant = await callGrant()
+    if (
+      grant.identity.terminalId !== remote.handle ||
+      grant.identity.destinationRuntimeId !== this.runtimeId ||
+      !samePtyOwnershipTransferSurfaceBinding(grant.surfaceBinding, surfaceBinding) ||
+      this.ptysById.get(request.ptyId) !== tracked ||
+      (tracked.incarnationId !== null && tracked.incarnationId !== grant.identity.incarnationId)
+    ) {
+      throw new Error('pty_ownership_transfer_source_authority_unavailable')
+    }
+    tracked.incarnationId = grant.identity.incarnationId
+    const preflight = await this.preflightPtyOwnershipTransfer({
+      connectionId: null,
+      ptyId: request.ptyId,
+      destinationRuntimeId: this.runtimeId
+    })
+    if (!preflight.transferSupported) {
+      throw new Error(`pty_ownership_transfer_preflight_blocked:${preflight.blocker ?? 'unknown'}`)
+    }
+    const coordinator = this.createPairedRuntimePtyOwnershipTransferCoordinator({
+      environmentId: remote.environmentId,
+      identity: grant.identity,
+      surfaceBinding,
+      ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+      ...(options.signal === undefined ? {} : { signal: options.signal })
+    })
+    if (!coordinator) {
+      throw new Error('pty_ownership_transfer_coordinator_unavailable')
+    }
+    const result = await coordinator.transfer()
+    const currentGrant = await callGrant()
+    const destination = result.destination.snapshot()
+    if (
+      this.ptysById.get(request.ptyId) !== tracked ||
+      tracked.incarnationId !== grant.identity.incarnationId ||
+      !samePtyOwnershipTransferSourceGrant(currentGrant, grant) ||
+      destination.phase !== 'published' ||
+      destination.executionVerdict !== 'live'
+    ) {
+      throw new Error('pty_ownership_transfer_published_route_unavailable')
+    }
+    return Object.freeze({
+      identity: result.identity,
+      commitReceipt: result.commitReceipt,
+      publicationReceipt: result.publicationReceipt
+    })
+  }
+
+  /**
+   * Installs the runtime-owned post-commit acknowledgement bridge once the PTY session exists.
+   * The bridge validates durable model evidence and never feeds bytes through renderer intake.
+   */
+  installPtyOwnershipTransferDestinationOutputBridge(): boolean {
+    if (this.ptyOwnershipTransferDestinationRegistry) {
+      return true
+    }
+    const registry = createPtyOwnershipTransferDestinationRegistry(
+      this.store,
+      this.runtimeId,
+      () => {},
+      (identity, surfaceBinding, frame) =>
+        this.acknowledgePtyOwnershipTransferPostCommitOutput(identity, surfaceBinding, frame)
+    )
+    if (!registry) {
+      return false
+    }
+    this.ptyOwnershipTransferDestinationRegistry = registry
+    try {
+      registry.recoverPersistedAdapters()
+    } catch (error) {
+      // Keep malformed or prior-runtime journals durable; output remains unverifiable.
+      console.warn('[pty-ownership-transfer] destination recovery hydration unavailable:', error)
+    }
+    return true
+  }
+
+  private acknowledgePtyOwnershipTransferPostCommitOutput(
+    identity: PtyOwnershipTransferWireIdentity,
+    surfaceBinding: PtyOwnershipTransferSurfaceBinding,
+    frame: PtyOwnershipTransferOutputFrame
+  ): { identity: PtyOwnershipTransferWireIdentity; throughSeq: number } {
+    const registry = this.ptyOwnershipTransferDestinationRegistry
+    if (!registry) {
+      throw new Error('pty_ownership_transfer_destination_output_bridge_unavailable')
+    }
+    const adapter = registry.get(identity.bridgeId)
+    if (!adapter) {
+      throw new Error('pty_ownership_transfer_destination_adapter_unavailable')
+    }
+    const snapshot = adapter.snapshot()
+    if (snapshot.phase !== 'committed' && snapshot.phase !== 'published') {
+      throw new Error('pty_ownership_transfer_destination_output_unavailable')
+    }
+    if (
+      !snapshot.surfaceBinding ||
+      !samePtyOwnershipTransferIdentity(snapshot.identity, identity) ||
+      !samePtyOwnershipTransferSurfaceBinding(snapshot.surfaceBinding, surfaceBinding)
+    ) {
+      throw new Error('pty_ownership_transfer_destination_identity_mismatch')
+    }
+    validatePtyOwnershipTransferDestinationOutputRoute(
+      {
+        runtimeId: this.runtimeId,
+        inspectPty: (ptyId) => this.ptysById.get(ptyId) ?? null
+      },
+      identity,
+      surfaceBinding
+    )
+    let frameRecord = this.ptyOwnershipTransferModelCheckpointsByBridge
+      .get(identity.bridgeId)
+      ?.get(frame.seq)
+    if (!frameRecord) {
+      const persisted = registry
+        .loadModelCheckpoints(identity)
+        .filter((checkpoint) => checkpoint.frameSeq === frame.seq)
+      if (persisted.length > 0) {
+        frameRecord = {
+          identity: Object.freeze({ ...identity }),
+          surfaceBinding: Object.freeze({ ...surfaceBinding }),
+          ptyId: persisted[0].ptyId,
+          frameLengthSu: persisted[0].frameLengthSu,
+          fragments: new Map(
+            persisted.map((checkpoint) => [
+              checkpoint.fragmentStartSu,
+              Object.freeze({
+                identity: Object.freeze({ ...identity }),
+                surfaceBinding: Object.freeze({ ...surfaceBinding }),
+                ptyId: checkpoint.ptyId,
+                frameSeq: checkpoint.frameSeq,
+                fragmentStartSu: checkpoint.fragmentStartSu,
+                fragmentEndSu: checkpoint.fragmentEndSu,
+                frameLengthSu: checkpoint.frameLengthSu,
+                data: checkpoint.data,
+                modelSequenceEnd: checkpoint.modelSequenceEnd
+              })
+            ])
+          )
+        }
+      }
+    }
+    if (!frameRecord) {
+      throw new Error('pty_ownership_transfer_model_checkpoint_unavailable')
+    }
+    if (
+      frameRecord.ptyId !== surfaceBinding.ptyId ||
+      frameRecord.frameLengthSu !== frame.data.length ||
+      !samePtyOwnershipTransferIdentity(frameRecord.identity, identity) ||
+      !samePtyOwnershipTransferSurfaceBinding(frameRecord.surfaceBinding, surfaceBinding)
+    ) {
+      throw new Error('pty_ownership_transfer_model_checkpoint_conflict')
+    }
+    const fragments = [...frameRecord.fragments.values()].sort(
+      (left, right) => left.fragmentStartSu - right.fragmentStartSu
+    )
+    let nextFragmentSu = 0
+    let assembled = ''
+    let previousModelSequenceEnd = 0
+    for (const fragment of fragments) {
+      if (
+        fragment.fragmentStartSu !== nextFragmentSu ||
+        fragment.fragmentEndSu <= fragment.fragmentStartSu ||
+        (assembled.length > 0 && fragment.modelSequenceEnd <= previousModelSequenceEnd)
+      ) {
+        throw new Error('pty_ownership_transfer_model_checkpoint_gap')
+      }
+      assembled += fragment.data
+      nextFragmentSu = fragment.fragmentEndSu
+      previousModelSequenceEnd = fragment.modelSequenceEnd
+    }
+    if (nextFragmentSu !== frameRecord.frameLengthSu || assembled !== frame.data) {
+      throw new Error('pty_ownership_transfer_model_checkpoint_conflict')
+    }
+    return { identity: Object.freeze({ ...identity }), throughSeq: frame.seq }
+  }
+
+  /** Reopens durable destination adapters after a runtime restart; source ownership stays fenced. */
+  recoverPtyOwnershipTransferDestinations(): readonly {
+    bridgeId: string
+    destinationRuntimeId: string
+    phase: PtyOwnershipTransferDestinationSnapshot['phase']
+  }[] {
+    const registry = this.ptyOwnershipTransferDestinationRegistry
+    if (!registry) {
+      return Object.freeze([])
+    }
+    try {
+      return Object.freeze(
+        registry
+          .recoverPersistedAdapters()
+          .map(({ bridgeId, destinationRuntimeId, phase }) =>
+            Object.freeze({ bridgeId, destinationRuntimeId, phase })
+          )
+      )
+    } catch (error) {
+      console.warn('[pty-ownership-transfer] destination recovery failed', error)
+      return Object.freeze([])
+    }
+  }
+
+  /**
+   * Reconcile durable committed direct-SSH transfers after that connection's provider returns.
+   *
+   * Hydration alone intentionally leaves the source route fenced. This hook is the explicit,
+   * mutation-gated step that may rekey/reattach it, and only when the authenticated provider
+   * proves the exact terminal, incarnation, lease, and a non-regressing owner generation.
+   */
+  recoverPtyOwnershipTransferDestinationsForConnection(
+    connectionId: string,
+    options: { signal?: AbortSignal; timeoutMs?: number } = {}
+  ): Promise<readonly PtyOwnershipTransferDestinationSnapshot[]> {
+    if (!connectionId) {
+      return Promise.resolve(Object.freeze([]))
+    }
+    const inFlight = this.ptyOwnershipTransferRecoveryByConnection.get(connectionId)
+    if (inFlight) {
+      return inFlight
+    }
+    const pending = this.recoverPtyOwnershipTransferDestinationsForConnectionInternal(
+      connectionId,
+      options
+    )
+    this.ptyOwnershipTransferRecoveryByConnection.set(connectionId, pending)
+    void pending
+      .finally(() => {
+        if (this.ptyOwnershipTransferRecoveryByConnection.get(connectionId) === pending) {
+          this.ptyOwnershipTransferRecoveryByConnection.delete(connectionId)
+        }
+      })
+      .catch(() => undefined)
+    return pending
+  }
+
+  private async recoverPtyOwnershipTransferDestinationsForConnectionInternal(
+    connectionId: string,
+    options: { signal?: AbortSignal; timeoutMs?: number }
+  ): Promise<readonly PtyOwnershipTransferDestinationSnapshot[]> {
+    // A startup provider callback must never turn construction into an implicit ownership move.
+    if (!this.ptyOwnershipTransferMutationEnabled()) {
+      return Object.freeze([])
+    }
+    const destination = this.ptyOwnershipTransferDestinationRegistry
+    const provider = this.getSshProviderFn?.(connectionId) as
+      | (IPtyProvider & {
+          ownershipTransfer?: PtyOwnershipTransferSource
+          providerGeneration?: number
+          getOwnershipTransferSourceIdentity?: (id: string) => Readonly<{
+            terminalId: string
+            incarnationId: string
+            ownerLease: string
+            sourceOwnerGeneration: number
+          }> | null
+          installPublishedOwnershipTransferRoute?: (route: {
+            ptyId: string
+            identity: PtyOwnershipTransferWireIdentity
+            attachmentId: string
+            capabilities: PtyOwnershipBridgeCapabilities
+            providerGeneration: number
+          }) => void
+        })
+      | undefined
+    const source = provider?.ownershipTransfer
+    const getSourceIdentity = provider?.getOwnershipTransferSourceIdentity
+    const getCapabilities = provider?.getOwnershipBridgeCapabilities
+    const installRoute = provider?.installPublishedOwnershipTransferRoute
+    if (
+      !destination ||
+      !provider ||
+      !source ||
+      !getSourceIdentity ||
+      !getCapabilities ||
+      !installRoute
+    ) {
+      return Object.freeze([])
+    }
+
+    let candidates: readonly PtyOwnershipTransferDestinationRecoveryCandidate[]
+    try {
+      // This is read-only discovery; malformed records remain durable and block this pass.
+      candidates = destination.listRecoveryCandidates()
+      destination.recoverPersistedAdapters()
+    } catch (error) {
+      console.warn('[pty-ownership-transfer] direct-SSH recovery discovery failed', error)
+      return Object.freeze([])
+    }
+
+    const recovered: PtyOwnershipTransferDestinationSnapshot[] = []
+    for (const candidate of candidates) {
+      const journal = candidate.journal
+      if (
+        journal.destinationRuntimeId !== this.runtimeId ||
+        (journal.phase !== 'committed' && journal.phase !== 'published') ||
+        !candidate.surfaceBinding
+      ) {
+        continue
+      }
+      const ptyId = toAppSshPtyId(connectionId, journal.terminalId)
+      if (
+        candidate.surfaceBinding.ptyId !== ptyId ||
+        candidate.surfaceBinding.executionHostId !== toSshExecutionHostId(connectionId)
+      ) {
+        continue
+      }
+      let sourceIdentity: ReturnType<NonNullable<typeof getSourceIdentity>>
+      try {
+        sourceIdentity = getSourceIdentity(ptyId)
+      } catch {
+        continue
+      }
+      if (
+        !sourceIdentity ||
+        sourceIdentity.terminalId !== journal.terminalId ||
+        sourceIdentity.incarnationId !== journal.incarnationId ||
+        sourceIdentity.ownerLease !== journal.ownerLease ||
+        !Number.isSafeInteger(sourceIdentity.sourceOwnerGeneration) ||
+        sourceIdentity.sourceOwnerGeneration <= 0 ||
+        sourceIdentity.sourceOwnerGeneration < journal.sourceOwnerGeneration
+      ) {
+        continue
+      }
+      // A newer authenticated owner generation requires atomic reconnect rekey. An older
+      // capability set cannot safely attach the journal's stale route, so leave it fenced.
+      if (sourceIdentity.sourceOwnerGeneration > journal.sourceOwnerGeneration) {
+        let capabilities: PtyOwnershipBridgeCapabilities | null
+        try {
+          capabilities = await getCapabilities({ signal: options.signal })
+        } catch {
+          continue
+        }
+        if (!capabilities?.reconnectRekey) {
+          continue
+        }
+      }
+      const adapter = destination.get(journal.bridgeId)
+      if (!adapter) {
+        continue
+      }
+      const identity: PtyOwnershipTransferWireIdentity = Object.freeze({
+        bridgeId: journal.bridgeId,
+        terminalId: journal.terminalId,
+        incarnationId: journal.incarnationId,
+        ownerLease: journal.ownerLease,
+        sourceOwnerGeneration: journal.sourceOwnerGeneration,
+        destinationRuntimeId: journal.destinationRuntimeId
+      })
+      try {
+        const coordinator = new PtyOwnershipTransferCoordinator({
+          source,
+          destination,
+          identity,
+          surfaceBinding: candidate.surfaceBinding,
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+          ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+          getDestinationCapabilities: (requestOptions) =>
+            getCapabilities({ signal: requestOptions?.signal }),
+          getReconnectGeneration: () => {
+            const current = getSourceIdentity(ptyId)
+            if (
+              !current ||
+              current.terminalId !== journal.terminalId ||
+              current.incarnationId !== journal.incarnationId ||
+              current.ownerLease !== journal.ownerLease
+            ) {
+              throw new Error('pty_ownership_transfer_source_authority_unavailable')
+            }
+            return current.sourceOwnerGeneration
+          }
+        })
+        const result = await coordinator.recover()
+        const snapshot = result.destination?.snapshot()
+        const capabilities = await getCapabilities({ signal: options.signal })
+        const providerGeneration = provider.providerGeneration
+        if (
+          typeof providerGeneration !== 'number' ||
+          !Number.isSafeInteger(providerGeneration) ||
+          providerGeneration <= 0
+        ) {
+          throw new Error('pty_ownership_transfer_recovery_route_unavailable')
+        }
+        if (
+          !snapshot ||
+          snapshot.phase !== 'published' ||
+          snapshot.executionVerdict !== 'live' ||
+          !snapshot.attachmentId ||
+          !capabilities ||
+          this.getSshProviderFn?.(connectionId) !== provider
+        ) {
+          throw new Error('pty_ownership_transfer_recovery_route_unavailable')
+        }
+        installRoute.call(provider, {
+          ptyId,
+          identity,
+          attachmentId: snapshot.attachmentId,
+          capabilities,
+          providerGeneration
+        })
+        recovered.push(snapshot)
+      } catch (error) {
+        // Keep the exact source fence and durable destination for explicit retry/review.
+        console.warn('[pty-ownership-transfer] direct-SSH recovery candidate skipped', {
+          bridgeId: journal.bridgeId,
+          error
+        })
+      }
+    }
+    return Object.freeze(recovered)
+  }
+
+  /** Proves exact SSH transfer output is recoverable from the persisted terminal model. */
+  async checkpointPtyOwnershipTransferModel(
+    request: RuntimePtyOwnershipTransferModelCheckpoint
+  ): Promise<void> {
+    const destination = this.ptyOwnershipTransferDestinationRegistry
+    const persist = this.store?.checkpointPtyOwnershipTransferTerminalModel
+    if (!destination || !persist) {
+      throw new Error('pty_ownership_transfer_model_checkpoint_unavailable')
+    }
+    const transfer = request.ownershipTransfer
+    if (
+      request.ptyIncarnation !== transfer.incarnationId ||
+      transfer.destinationRuntimeId !== this.runtimeId ||
+      !Number.isSafeInteger(request.modelSequenceEnd) ||
+      request.modelSequenceEnd <= 0 ||
+      request.projectionSequenceEnd !== request.modelSequenceEnd
+    ) {
+      throw new Error('pty_ownership_transfer_model_checkpoint_invalid')
+    }
+    const adapter = destination.get(transfer.bridgeId)
+    if (!adapter) {
+      throw new Error('pty_ownership_transfer_model_checkpoint_destination_unavailable')
+    }
+    const before = adapter.snapshot()
+    if (
+      !before ||
+      before.phase !== 'published' ||
+      !before.surfaceBinding ||
+      !before.publicationReceipt ||
+      !samePtyOwnershipTransferIdentity(before.identity, transfer)
+    ) {
+      throw new Error('pty_ownership_transfer_model_checkpoint_destination_unavailable')
+    }
+    validatePtyOwnershipTransferDestinationOutputRoute(
+      {
+        runtimeId: this.runtimeId,
+        inspectPty: (ptyId) => this.ptysById.get(ptyId) ?? null
+      },
+      before.identity,
+      before.surfaceBinding
+    )
+    if (before.surfaceBinding.ptyId !== request.ptyId) {
+      throw new Error('pty_ownership_transfer_model_checkpoint_route_mismatch')
+    }
+
+    const snapshot = await this.serializeHeadlessTerminalBuffer(request.ptyId, {
+      scrollbackRows: normalizeDesktopTerminalScrollbackRows(
+        this.store?.getSettings().terminalScrollbackRows
+      ),
+      includeEmpty: true
+    })
+    if (!snapshot || snapshot.seq !== request.modelSequenceEnd) {
+      throw new Error('pty_ownership_transfer_model_checkpoint_sequence_mismatch')
+    }
+    const after = adapter.snapshot()
+    if (
+      after.phase !== 'published' ||
+      !after.surfaceBinding ||
+      !after.publicationReceipt ||
+      !samePtyOwnershipTransferIdentity(after.identity, before.identity) ||
+      !samePtyOwnershipTransferPublicationReceipt(
+        after.publicationReceipt,
+        before.publicationReceipt
+      ) ||
+      this.getPtyOutputSequence(request.ptyId) !== request.modelSequenceEnd
+    ) {
+      throw new Error('pty_ownership_transfer_model_checkpoint_superseded')
+    }
+    validatePtyOwnershipTransferDestinationOutputRoute(
+      {
+        runtimeId: this.runtimeId,
+        inspectPty: (ptyId) => this.ptysById.get(ptyId) ?? null
+      },
+      after.identity,
+      after.surfaceBinding
+    )
+    const checkpoint: PtyOwnershipTransferTerminalModelCheckpointRequest = {
+      identity: after.identity,
+      surfaceBinding: after.surfaceBinding,
+      publicationReceipt: after.publicationReceipt,
+      modelData: `${snapshot.scrollbackAnsi ?? ''}${snapshot.data}${snapshot.frameRestoreAnsi ?? ''}${snapshot.pendingEscapeTailAnsi ?? ''}`
+    }
+    persist.call(this.store, checkpoint)
+    destination.recordModelCheckpoint(after.identity, {
+      ptyId: request.ptyId,
+      frameSeq: transfer.frameSeq,
+      fragmentStartSu: transfer.fragmentStartSu,
+      fragmentEndSu: transfer.fragmentEndSu,
+      frameLengthSu: transfer.frameLengthSu,
+      data: request.data,
+      modelSequenceEnd: request.modelSequenceEnd
+    })
+    this.recordPtyOwnershipTransferModelCheckpoint({
+      identity: after.identity,
+      surfaceBinding: after.surfaceBinding,
+      ptyId: request.ptyId,
+      frameSeq: transfer.frameSeq,
+      fragmentStartSu: transfer.fragmentStartSu,
+      fragmentEndSu: transfer.fragmentEndSu,
+      frameLengthSu: transfer.frameLengthSu,
+      data: request.data,
+      modelSequenceEnd: request.modelSequenceEnd
+    })
+  }
+
+  private recordPtyOwnershipTransferModelCheckpoint(
+    fragment: PtyOwnershipTransferModelCheckpointFragment
+  ): void {
+    let frames = this.ptyOwnershipTransferModelCheckpointsByBridge.get(fragment.identity.bridgeId)
+    if (!frames) {
+      frames = new Map()
+      this.ptyOwnershipTransferModelCheckpointsByBridge.set(fragment.identity.bridgeId, frames)
+    }
+    const existing = frames.get(fragment.frameSeq)
+    if (existing) {
+      if (
+        !samePtyOwnershipTransferIdentity(existing.identity, fragment.identity) ||
+        existing.ptyId !== fragment.ptyId ||
+        existing.frameLengthSu !== fragment.frameLengthSu ||
+        !samePtyOwnershipTransferSurfaceBinding(existing.surfaceBinding, fragment.surfaceBinding)
+      ) {
+        throw new Error('pty_ownership_transfer_model_checkpoint_conflict')
+      }
+    } else {
+      frames.set(fragment.frameSeq, {
+        identity: Object.freeze({ ...fragment.identity }),
+        surfaceBinding: Object.freeze({ ...fragment.surfaceBinding }),
+        ptyId: fragment.ptyId,
+        frameLengthSu: fragment.frameLengthSu,
+        fragments: new Map()
+      })
+    }
+    const frame = frames.get(fragment.frameSeq)!
+    const previous = frame.fragments.get(fragment.fragmentStartSu)
+    if (previous) {
+      if (
+        previous.fragmentEndSu !== fragment.fragmentEndSu ||
+        previous.data !== fragment.data ||
+        previous.modelSequenceEnd !== fragment.modelSequenceEnd
+      ) {
+        throw new Error('pty_ownership_transfer_model_checkpoint_conflict')
+      }
+      return
+    }
+    frame.fragments.set(fragment.fragmentStartSu, Object.freeze({ ...fragment }))
+    // Keep this receipt ledger bounded across long-lived SSH sessions.
+    const allFrames = [...this.ptyOwnershipTransferModelCheckpointsByBridge.values()]
+    let count = allFrames.reduce((total, entries) => total + entries.size, 0)
+    while (count > 4096) {
+      const first = allFrames.find((entries) => entries.size > 0)
+      const oldest = first ? [...first.keys()].sort((left, right) => left - right)[0] : undefined
+      if (first && oldest !== undefined) {
+        first.delete(oldest)
+        count -= 1
+      } else {
+        break
+      }
+    }
+  }
+
+  /** Builds a coordinator only after exact direct-SSH and destination fencing. */
+  createPtyOwnershipTransferCoordinator(
+    options: Omit<PtyOwnershipTransferCoordinatorOptions, 'source' | 'destination'> & {
+      connectionId: string
+    }
+  ): PtyOwnershipTransferCoordinator | null {
+    // Coordinator construction is an authority boundary; keep it closed by default.
+    if (!this.ptyOwnershipTransferMutationEnabled()) {
+      return null
+    }
+    const destination = this.ptyOwnershipTransferDestinationRegistry
+    if (!destination || !options.connectionId) {
+      return null
+    }
+    if (options.identity.destinationRuntimeId !== this.runtimeId) {
+      return null
+    }
+    const appPtyId = toAppSshPtyId(options.connectionId, options.identity.terminalId)
+    const tracked = this.ptysById.get(appPtyId)
+    if (!tracked) {
+      return null
+    }
+    try {
+      validatePtyOwnershipTransferDestinationOutputRoute(
+        {
+          runtimeId: this.runtimeId,
+          inspectPty: () => tracked
+        },
+        options.identity,
+        options.surfaceBinding
+      )
+    } catch {
+      return null
+    }
+    const provider = this.getSshProviderFn?.(options.connectionId) as
+      | {
+          ownershipTransfer?: PtyOwnershipTransferSource
+          getOwnershipBridgeCapabilities?: (options?: {
+            signal?: AbortSignal
+          }) => Promise<PtyOwnershipBridgeCapabilities | null>
+        }
+      | undefined
+    const source = provider?.ownershipTransfer
+    if (!source) {
+      return null
+    }
+    return new PtyOwnershipTransferCoordinator({
+      ...options,
+      source,
+      destination,
+      // Capability negotiation is refreshed when transfer() starts; a stale preflight result
+      // must not authorize a destination attachment after a relay reconnect.
+      getDestinationCapabilities: (requestOptions) =>
+        provider?.getOwnershipBridgeCapabilities?.({ signal: requestOptions?.signal }) ??
+        Promise.resolve(null)
+    })
+  }
+
+  /** Execute an explicitly authorized direct-SSH transfer through the durable coordinator. */
+  async transferPtyOwnership(
+    request: PtyOwnershipTransferExecuteRequest,
+    options?: { signal?: AbortSignal }
+  ): Promise<PtyOwnershipTransferExecuteResult> {
+    if (
+      !request ||
+      typeof request.connectionId !== 'string' ||
+      request.connectionId.length === 0 ||
+      typeof request.ptyId !== 'string' ||
+      request.ptyId.length === 0
+    ) {
+      throw new Error('pty_ownership_transfer_execute_request_invalid')
+    }
+    const parsed = parseAppSshPtyId(request.ptyId)
+    if (
+      !parsed ||
+      parsed.connectionId !== request.connectionId ||
+      request.destinationRuntimeId !== this.runtimeId
+    ) {
+      throw new Error('pty_ownership_transfer_execute_identity_mismatch')
+    }
+    const tracked = this.ptysById.get(request.ptyId)
+    const provider = this.getSshProviderFn?.(request.connectionId) as
+      | (IPtyProvider & {
+          providerGeneration?: number
+          getOwnershipTransferSourceIdentity?: (id: string) => Readonly<{
+            terminalId: string
+            incarnationId: string
+            ownerLease: string
+            sourceOwnerGeneration: number
+          }> | null
+          installPublishedOwnershipTransferRoute?: (route: {
+            ptyId: string
+            identity: PtyOwnershipTransferWireIdentity
+            attachmentId: string
+            capabilities: PtyOwnershipBridgeCapabilities
+            providerGeneration: number
+          }) => void
+        })
+      | undefined
+    const source = provider?.getOwnershipTransferSourceIdentity?.(request.ptyId)
+    const installPublishedOwnershipTransferRoute = provider?.installPublishedOwnershipTransferRoute
+    const providerGeneration = provider?.providerGeneration
+    if (
+      !provider ||
+      !tracked ||
+      !tracked.incarnationId ||
+      !source ||
+      source.terminalId !== parsed.relayPtyId ||
+      source.incarnationId !== tracked.incarnationId
+    ) {
+      throw new Error('pty_ownership_transfer_source_authority_unavailable')
+    }
+    if (
+      !installPublishedOwnershipTransferRoute ||
+      typeof providerGeneration !== 'number' ||
+      !Number.isSafeInteger(providerGeneration) ||
+      providerGeneration <= 0
+    ) {
+      throw new Error('pty_ownership_transfer_published_route_unavailable')
+    }
+    const identity: PtyOwnershipTransferWireIdentity = Object.freeze({
+      version: PTY_OWNERSHIP_TRANSFER_WIRE_VERSION,
+      bridgeId: randomUUID(),
+      terminalId: source.terminalId,
+      incarnationId: source.incarnationId,
+      ownerLease: source.ownerLease,
+      sourceOwnerGeneration: source.sourceOwnerGeneration,
+      destinationRuntimeId: this.runtimeId
+    })
+    if (request.identity) {
+      try {
+        const hinted = parsePtyOwnershipTransferWireIdentity(request.identity)
+        if (
+          hinted.terminalId !== identity.terminalId ||
+          hinted.incarnationId !== identity.incarnationId ||
+          hinted.ownerLease !== identity.ownerLease ||
+          hinted.sourceOwnerGeneration !== identity.sourceOwnerGeneration ||
+          hinted.destinationRuntimeId !== identity.destinationRuntimeId
+        ) {
+          throw new Error('pty_ownership_transfer_execute_identity_mismatch')
+        }
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === 'pty_ownership_transfer_execute_identity_mismatch'
+        ) {
+          throw error
+        }
+        throw new Error('pty_ownership_transfer_execute_request_invalid')
+      }
+    }
+    const surfaceBinding = parsePtyOwnershipTransferSurfaceBinding(request.surfaceBinding)
+    if (surfaceBinding.ptyId !== request.ptyId) {
+      throw new Error('pty_ownership_transfer_execute_surface_mismatch')
+    }
+    const preflight = await this.preflightPtyOwnershipTransfer({
+      connectionId: request.connectionId,
+      ptyId: request.ptyId,
+      destinationRuntimeId: request.destinationRuntimeId
+    })
+    if (!preflight.transferSupported) {
+      throw new Error(`pty_ownership_transfer_preflight_blocked:${preflight.blocker ?? 'unknown'}`)
+    }
+    const coordinator = this.createPtyOwnershipTransferCoordinator({
+      connectionId: request.connectionId,
+      identity,
+      surfaceBinding,
+      ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+      ...(options?.signal === undefined ? {} : { signal: options.signal })
+    })
+    if (!coordinator) {
+      throw new Error('pty_ownership_transfer_coordinator_unavailable')
+    }
+    const result = await coordinator.transfer()
+    const destination = result.destination.snapshot()
+    const currentSource = provider.getOwnershipTransferSourceIdentity?.(request.ptyId)
+    if (
+      this.getSshProviderFn?.(request.connectionId) !== provider ||
+      provider.providerGeneration !== providerGeneration ||
+      !currentSource ||
+      currentSource.terminalId !== source.terminalId ||
+      currentSource.incarnationId !== source.incarnationId ||
+      currentSource.ownerLease !== source.ownerLease ||
+      currentSource.sourceOwnerGeneration !== source.sourceOwnerGeneration ||
+      destination.phase !== 'published' ||
+      !destination.attachmentId ||
+      destination.executionVerdict !== 'live' ||
+      !preflight.capabilities
+    ) {
+      throw new Error('pty_ownership_transfer_published_route_unavailable')
+    }
+    installPublishedOwnershipTransferRoute.call(provider, {
+      ptyId: request.ptyId,
+      identity: result.identity,
+      attachmentId: destination.attachmentId,
+      capabilities: preflight.capabilities,
+      providerGeneration
+    })
+    return Object.freeze({
+      identity: result.identity,
+      commitReceipt: result.commitReceipt,
+      publicationReceipt: result.publicationReceipt
+    })
+  }
+
+  /** Moves exact reattached direct-SSH surfaces when the process canary is enabled. */
+  async transferCanaryDirectSshPtysForConnection(
+    connectionId: string,
+    options: { signal?: AbortSignal; timeoutMs?: number } = {}
+  ): Promise<readonly PtyOwnershipTransferExecuteResult[]> {
+    if (!connectionId || !this.ptyOwnershipTransferMutationEnabled()) {
+      return Object.freeze([])
+    }
+    const destination = this.getPtyOwnershipTransferDestinationRegistry()
+    if (!destination) {
+      return Object.freeze([])
+    }
+    const protectedSources = new Set<string>()
+    const protectedSurfaces = new Set<string>()
+    for (const candidate of destination.listRecoveryCandidates()) {
+      protectedSources.add(`${candidate.journal.terminalId}\0${candidate.journal.incarnationId}`)
+      if (candidate.surfaceBinding) {
+        protectedSurfaces.add(candidate.surfaceBinding.ptyId)
+      }
+    }
+    const candidates = [...this.ptysById.values()]
+      .filter(
+        (pty) =>
+          pty.connectionId === connectionId &&
+          pty.connected &&
+          pty.incarnationId !== null &&
+          parsePaneKey(pty.paneKey ?? '') !== null
+      )
+      .sort((left, right) => left.ptyId.localeCompare(right.ptyId))
+    const transferred: PtyOwnershipTransferExecuteResult[] = []
+    for (const candidate of candidates) {
+      if (!this.ptyOwnershipTransferMutationEnabled()) {
+        break
+      }
+      const current = this.ptysById.get(candidate.ptyId)
+      const pane = parsePaneKey(candidate.paneKey ?? '')
+      const parsed = parseAppSshPtyId(candidate.ptyId)
+      if (
+        current !== candidate ||
+        !candidate.incarnationId ||
+        !pane ||
+        !parsed ||
+        parsed.connectionId !== connectionId ||
+        protectedSurfaces.has(candidate.ptyId) ||
+        protectedSources.has(`${parsed.relayPtyId}\0${candidate.incarnationId}`)
+      ) {
+        continue
+      }
+      const parsedWorkspace = parseWorkspaceKey(candidate.worktreeId)
+      const workspaceKey = parsedWorkspace
+        ? parsedWorkspace.type === 'folder'
+          ? folderWorkspaceKey(parsedWorkspace.folderWorkspaceId)
+          : worktreeWorkspaceKey(parsedWorkspace.worktreeId)
+        : this.store
+              ?.getFolderWorkspaces?.()
+              .some((workspace) => workspace.id === candidate.worktreeId)
+          ? folderWorkspaceKey(candidate.worktreeId)
+          : worktreeWorkspaceKey(candidate.worktreeId)
+      const result = await this.transferPtyOwnership(
+        {
+          connectionId,
+          ptyId: candidate.ptyId,
+          destinationRuntimeId: this.runtimeId,
+          surfaceBinding: {
+            executionHostId: toSshExecutionHostId(connectionId),
+            workspaceKey,
+            tabId: pane.tabId,
+            leafId: pane.leafId,
+            ptyId: candidate.ptyId
+          },
+          ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs })
+        },
+        options.signal === undefined ? undefined : { signal: options.signal }
+      )
+      transferred.push(result)
+      protectedSources.add(`${parsed.relayPtyId}\0${candidate.incarnationId}`)
+      protectedSurfaces.add(candidate.ptyId)
+    }
+    return Object.freeze(transferred)
+  }
+
+  preflightPtyOwnershipTransfer(
+    request: PtyOwnershipTransferPreflightRequest
+  ): Promise<PtyOwnershipTransferPreflightResult> {
+    return this.ptyOwnershipTransferOrchestrator.preflight(request)
+  }
+
+  getPtyOwnershipTransferStatus(
+    request: PtyOwnershipTransferStatusProbeRequest
+  ): Promise<PtyOwnershipTransferStatusResult> {
+    return this.ptyOwnershipTransferOrchestrator.status(request)
   }
 
   resolveOrchestrationWorkerServer(selector: string): OrchestrationWorkerServer {
@@ -9889,7 +11247,9 @@ export class OrcaRuntimeService {
       // renderer's live pin guard and durable close transaction.
       if (closingWholeParent && !this.tabs.has(tab.parentTabId)) {
         this.closeHeadlessMobileTerminalTab(worktreeId, snapshot, tab, {
-          killPtys: options.reason === undefined || options.reason === 'user'
+          killPtys:
+            !options.localPtyTeardownOwnedExternally &&
+            (options.reason === undefined || options.reason === 'user')
         })
         this.notifyRendererOfHeadlessTerminalClose(tab.parentTabId)
         this.store?.flushOrThrow?.()
@@ -9928,7 +11288,8 @@ export class OrcaRuntimeService {
           // Why: after relay recovery the renderer can acknowledge a tab it no longer mirrors; the HUB must still retire its SSH-owned surface.
           this.closeHeadlessMobileTerminalTab(worktreeId, remainingSnapshot, remainingTab, {
             // Why: the renderer may already have durably removed the tab before acknowledging.
-            allowMissingPersistedTab: true
+            allowMissingPersistedTab: true,
+            killPtys: !options.localPtyTeardownOwnedExternally
           })
           this.notifyRendererOfHeadlessTerminalClose(tab.parentTabId)
           this.store?.flushOrThrow?.()
@@ -9939,20 +11300,27 @@ export class OrcaRuntimeService {
       // Why: notifier implementations without the acknowledged relay may expose
       // only raw pane close. Runtime-owned parents still need de-persist + kill.
       if (closingWholeParent && this.isRuntimeOwnedHeadlessMobileTab(worktreeId, tab)) {
-        this.closeHeadlessMobileTerminalTab(worktreeId, snapshot, tab)
+        this.closeHeadlessMobileTerminalTab(worktreeId, snapshot, tab, {
+          killPtys: !options.localPtyTeardownOwnedExternally
+        })
         this.notifyRendererOfHeadlessTerminalClose(tab.parentTabId)
         this.store?.flushOrThrow?.()
         return finishCommittedClose()
       }
       if (!this.notifier?.closeTerminal) {
-        this.closeHeadlessMobileTerminalTab(worktreeId, snapshot, tab)
+        this.closeHeadlessMobileTerminalTab(worktreeId, snapshot, tab, {
+          killPtys: !options.localPtyTeardownOwnedExternally
+        })
         this.store?.flushOrThrow?.()
         return finishCommittedClose()
       }
       if (tab.id === tabId) {
         const pty = this.findPtyForMobileTerminalTab(worktreeId, tab)
         if (pty) {
-          if (this.ptyController?.kill(pty.ptyId) !== true) {
+          if (
+            !options.localPtyTeardownOwnedExternally &&
+            this.ptyController?.kill(pty.ptyId) !== true
+          ) {
             throw new Error('terminal_close_failed')
           }
           return finishCommittedClose()
@@ -12898,6 +14266,8 @@ export class OrcaRuntimeService {
     this.providerBufferAcquisitionsByPtyId.delete(ptyId)
     this.providerVisibleStateByPtyId.delete(ptyId)
     this.providerVisibleRetryAtByPtyId.delete(ptyId)
+    this.terminalSendOperationsByPtyId.delete(ptyId)
+    this.terminalSendOperationsInFlightByPtyId.delete(ptyId)
   }
 
   synchronizePtyOutputSequenceFromProvider(
@@ -14297,6 +15667,7 @@ export class OrcaRuntimeService {
     opts: { scrollbackRows?: number; includeEmpty?: boolean } = {}
   ): Promise<{
     data: string
+    frameRestoreAnsi?: string
     cols: number
     rows: number
     cwd?: string | null
@@ -19349,6 +20720,8 @@ export class OrcaRuntimeService {
       // Why: the pre-Enter wait now scales with the payload, so an abandoned request must be
       // able to stop it instead of writing Enter minutes after the caller gave up.
       signal?: AbortSignal
+      /** Stable caller identity used to deduplicate a replay after transport loss. */
+      operationId?: string
     } = {}
   ): Promise<RuntimeTerminalSend> {
     const pty = this.getLivePtyForHandle(handle)
@@ -19361,12 +20734,16 @@ export class OrcaRuntimeService {
         throw new Error('invalid_terminal_send')
       }
       await assertTerminalInputWithinLimitWithYield(action.text)
-      await this.writeTerminalAction(pty.pty.ptyId, action, payload, options)
-      return {
-        handle,
-        accepted: true,
-        bytesWritten: Buffer.byteLength(payload, 'utf8')
-      }
+      const ptyIncarnationId =
+        pty.pty.incarnationId ?? `runtime:${this.getPtyLifecycleGeneration(pty.pty.ptyId)}`
+      const bytesWritten = await this.writeTerminalSendWithReceipt({
+        ptyId: pty.pty.ptyId,
+        incarnationId: ptyIncarnationId,
+        operationId: options.operationId,
+        payload,
+        write: () => this.writeTerminalAction(pty.pty.ptyId, action, payload, options)
+      })
+      return { handle, accepted: true, bytesWritten }
     }
 
     const { leaf } = this.getLiveLeafForHandle(handle)
@@ -19386,13 +20763,17 @@ export class OrcaRuntimeService {
       throw new Error('terminal_not_writable')
     }
 
-    await this.writeTerminalAction(leaf.ptyId, action, payload, options)
-
-    return {
-      handle,
-      accepted: true,
-      bytesWritten: Buffer.byteLength(payload, 'utf8')
-    }
+    const leafIncarnationId =
+      this.ptysById.get(leaf.ptyId)?.incarnationId ??
+      `runtime:${this.getPtyLifecycleGeneration(leaf.ptyId)}`
+    const bytesWritten = await this.writeTerminalSendWithReceipt({
+      ptyId: leaf.ptyId,
+      incarnationId: leafIncarnationId,
+      operationId: options.operationId,
+      payload,
+      write: () => this.writeTerminalAction(leaf.ptyId!, action, payload, options)
+    })
+    return { handle, accepted: true, bytesWritten }
   }
 
   async sendTerminalAgentPrompt(
@@ -19402,9 +20783,12 @@ export class OrcaRuntimeService {
       beforeWrite?: (ptyId: string) => void | Promise<void>
       suffixFailureError?: string
       signal?: AbortSignal
+      /** Stable caller identity used to deduplicate a replay after transport loss. */
+      operationId?: string
     } = {}
   ): Promise<RuntimeTerminalSend> {
     const payload = buildAgentPromptPasteBytes(prompt)
+    const receiptedPayload = `${payload}${AGENT_PROMPT_SUBMIT}`
     const pty = this.getLivePtyForHandle(handle)
     if (pty) {
       if (!pty.pty.connected) {
@@ -19412,22 +20796,21 @@ export class OrcaRuntimeService {
       }
       await assertTerminalInputWithinLimitWithYield(payload)
       const generation = this.getPtyLifecycleGeneration(pty.pty.ptyId)
-      const submits = await this.serializeAgentPromptSubmission(
-        pty.pty.ptyId,
-        generation,
-        async () => {
-          this.assertLiveTerminalHandleTargetsPty(handle, pty.pty.ptyId)
-          this.assertAgentPromptGeneration(pty.pty.ptyId, generation)
-          return await this.writeTerminalAgentPrompt(
-            handle,
-            pty.pty.ptyId,
-            generation,
-            payload,
-            options
-          )
+      const incarnationId =
+        pty.pty.incarnationId ?? `runtime:${this.getPtyLifecycleGeneration(pty.pty.ptyId)}`
+      const bytesWritten = await this.writeTerminalSendWithReceipt({
+        ptyId: pty.pty.ptyId,
+        incarnationId,
+        operationId: options.operationId,
+        payload: receiptedPayload,
+        write: async () => {
+          await this.serializeAgentPromptSubmission(pty.pty.ptyId, generation, async () => {
+            this.assertLiveTerminalHandleTargetsPty(handle, pty.pty.ptyId)
+            this.assertAgentPromptGeneration(pty.pty.ptyId, generation)
+            await this.writeTerminalAgentPrompt(handle, pty.pty.ptyId, generation, payload, options)
+          })
         }
-      )
-      const bytesWritten = Buffer.byteLength(payload, 'utf8') + submits
+      })
       return { handle, accepted: true, bytesWritten }
     }
 
@@ -19442,12 +20825,22 @@ export class OrcaRuntimeService {
       throw new Error('terminal_not_writable')
     }
     const generation = this.getPtyLifecycleGeneration(leaf.ptyId)
-    const submits = await this.serializeAgentPromptSubmission(leaf.ptyId, generation, async () => {
-      this.assertLiveTerminalHandleTargetsPty(handle, leaf.ptyId!)
-      this.assertAgentPromptGeneration(leaf.ptyId!, generation)
-      return await this.writeTerminalAgentPrompt(handle, leaf.ptyId!, generation, payload, options)
+    const incarnationId =
+      this.ptysById.get(leaf.ptyId)?.incarnationId ??
+      `runtime:${this.getPtyLifecycleGeneration(leaf.ptyId)}`
+    const bytesWritten = await this.writeTerminalSendWithReceipt({
+      ptyId: leaf.ptyId,
+      incarnationId,
+      operationId: options.operationId,
+      payload: receiptedPayload,
+      write: async () => {
+        await this.serializeAgentPromptSubmission(leaf.ptyId!, generation, async () => {
+          this.assertLiveTerminalHandleTargetsPty(handle, leaf.ptyId!)
+          this.assertAgentPromptGeneration(leaf.ptyId!, generation)
+          await this.writeTerminalAgentPrompt(handle, leaf.ptyId!, generation, payload, options)
+        })
+      }
     })
-    const bytesWritten = Buffer.byteLength(payload, 'utf8') + submits
     return { handle, accepted: true, bytesWritten }
   }
 
@@ -20053,6 +21446,8 @@ export class OrcaRuntimeService {
       afterWrite?: (ptyId: string) => void | Promise<void>
       suffixFailureError?: string
       signal?: AbortSignal
+      /** Stable caller identity used to deduplicate replayed writes. */
+      operationId?: string
     } = {}
   ): Promise<void> {
     // Why: direct terminal.send can carry paste-sized text from RPC/mobile
@@ -20084,7 +21479,10 @@ export class OrcaRuntimeService {
         }
         throw error
       }
-      const suffixWrote = this.ptyController?.write(ptyId, suffix) ?? false
+      const suffixOperationId = options.operationId ? `${options.operationId}:suffix` : undefined
+      const suffixWrote = suffixOperationId
+        ? (this.ptyController?.write(ptyId, suffix, { operationId: suffixOperationId }) ?? false)
+        : (this.ptyController?.write(ptyId, suffix) ?? false)
       if (!suffixWrote) {
         throw new Error(options.suffixFailureError ?? 'terminal_not_writable')
       }
@@ -20097,11 +21495,161 @@ export class OrcaRuntimeService {
 
     await options.beforeWrite?.(ptyId)
     options.reserveWrite?.(ptyId)
-    const wrote = this.ptyController?.write(ptyId, payload) ?? false
+    const wrote = options.operationId
+      ? (this.ptyController?.write(ptyId, payload, { operationId: options.operationId }) ?? false)
+      : (this.ptyController?.write(ptyId, payload) ?? false)
     if (!wrote) {
       throw new Error('terminal_not_writable')
     }
     await options.afterWrite?.(ptyId)
+  }
+
+  private terminalSendPayloadFingerprint(payload: string): string {
+    return createHash('sha256').update(payload, 'utf8').digest('hex')
+  }
+
+  private async writeTerminalSendWithReceipt(args: {
+    ptyId: string
+    incarnationId: string | null | undefined
+    operationId: string | undefined
+    payload: string
+    write: () => Promise<void>
+  }): Promise<number> {
+    const { ptyId, incarnationId, operationId, payload, write } = args
+    const bytesWritten = Buffer.byteLength(payload, 'utf8')
+    if (!operationId || !incarnationId) {
+      await write()
+      return bytesWritten
+    }
+
+    const payloadFingerprint = this.terminalSendPayloadFingerprint(payload)
+    const recorded = this.readTerminalSendOperation(ptyId, incarnationId, operationId, payload)
+    if (recorded) {
+      return recorded.bytesWritten
+    }
+
+    const inFlightOperations = this.terminalSendOperationsInFlightByPtyId.get(ptyId)
+    const inFlight = inFlightOperations?.get(operationId)
+    if (inFlight) {
+      if (
+        inFlight.incarnationId !== incarnationId ||
+        inFlight.payloadFingerprint !== payloadFingerprint
+      ) {
+        throw new Error('terminal_send_operation_conflict')
+      }
+      return await inFlight.promise
+    }
+
+    this.ensureTerminalSendOperationCapacity(ptyId, operationId)
+    const promise = Promise.resolve().then(async () => {
+      await write()
+      return bytesWritten
+    })
+    const operations = inFlightOperations ?? new Map<string, TerminalSendOperationInFlight>()
+    operations.set(operationId, Object.freeze({ incarnationId, payloadFingerprint, promise }))
+    this.terminalSendOperationsInFlightByPtyId.set(ptyId, operations)
+    try {
+      const result = await promise
+      this.rememberTerminalSendOperation(ptyId, incarnationId, operationId, payload, result)
+      return result
+    } finally {
+      if (operations.get(operationId)?.promise === promise) {
+        operations.delete(operationId)
+      }
+      if (operations.size === 0) {
+        this.terminalSendOperationsInFlightByPtyId.delete(ptyId)
+      }
+    }
+  }
+
+  private readTerminalSendOperation(
+    ptyId: string,
+    incarnationId: string | null | undefined,
+    operationId: string | undefined,
+    payload: string
+  ): { bytesWritten: number } | null {
+    if (!operationId || !incarnationId) {
+      return null
+    }
+    const operations = this.terminalSendOperationsByPtyId.get(ptyId)
+    const existing = operations?.get(operationId)
+    if (!existing) {
+      return null
+    }
+    if (existing.expiresAt <= Date.now()) {
+      operations?.delete(operationId)
+      if (operations?.size === 0) {
+        this.terminalSendOperationsByPtyId.delete(ptyId)
+      }
+      return null
+    }
+    if (
+      existing.incarnationId !== incarnationId ||
+      existing.payloadFingerprint !== this.terminalSendPayloadFingerprint(payload)
+    ) {
+      throw new Error('terminal_send_operation_conflict')
+    }
+    return { bytesWritten: existing.bytesWritten }
+  }
+
+  private rememberTerminalSendOperation(
+    ptyId: string,
+    incarnationId: string | null | undefined,
+    operationId: string | undefined,
+    payload: string,
+    bytesWritten: number
+  ): void {
+    if (!operationId || !incarnationId) {
+      return
+    }
+    const now = Date.now()
+    const operations = this.terminalSendOperationsByPtyId.get(ptyId) ?? new Map()
+    for (const [id, record] of operations) {
+      if (record.expiresAt <= now) {
+        operations.delete(id)
+      }
+    }
+    // Capacity is checked before the PTY write by ensureTerminalSendOperationCapacity.
+    operations.set(
+      operationId,
+      Object.freeze({
+        incarnationId,
+        payloadFingerprint: this.terminalSendPayloadFingerprint(payload),
+        bytesWritten,
+        expiresAt: now + TERMINAL_SEND_OPERATION_TTL_MS
+      })
+    )
+    this.terminalSendOperationsByPtyId.set(ptyId, operations)
+  }
+
+  private ensureTerminalSendOperationCapacity(
+    ptyId: string,
+    operationId: string | undefined
+  ): void {
+    if (!operationId) {
+      return
+    }
+    const operations = this.terminalSendOperationsByPtyId.get(ptyId)
+    const inFlightOperations = this.terminalSendOperationsInFlightByPtyId.get(ptyId)
+    if (!operations && !inFlightOperations) {
+      return
+    }
+    const now = Date.now()
+    if (operations) {
+      for (const [id, record] of operations) {
+        if (record.expiresAt <= now) {
+          operations.delete(id)
+        }
+      }
+    }
+    if (operations?.size === 0) {
+      this.terminalSendOperationsByPtyId.delete(ptyId)
+    }
+    const completedCount = operations?.size ?? 0
+    const inFlightCount = inFlightOperations?.size ?? 0
+    if (completedCount + inFlightCount >= TERMINAL_SEND_OPERATION_MAX_PER_PTY) {
+      throw new Error('terminal_send_operation_window_exhausted')
+    }
   }
 
   private async writeTerminalInputChunks(
@@ -20111,19 +21659,27 @@ export class OrcaRuntimeService {
       beforeWrite?: (ptyId: string) => void | Promise<void>
       reserveWrite?: (ptyId: string) => void
       afterWrite?: (ptyId: string) => void | Promise<void>
+      operationId?: string
     } = {}
   ): Promise<void> {
     const chunks = iterateTerminalInputChunks(text)
+    let chunkIndex = 0
     let chunk = chunks.next()
     while (!chunk.done) {
       await options.beforeWrite?.(ptyId)
       options.reserveWrite?.(ptyId)
-      const wrote = this.ptyController?.write(ptyId, chunk.value) ?? false
+      const operationId = options.operationId
+        ? operationIdForChunk(options.operationId, chunkIndex)
+        : undefined
+      const wrote = operationId
+        ? (this.ptyController?.write(ptyId, chunk.value, { operationId }) ?? false)
+        : (this.ptyController?.write(ptyId, chunk.value) ?? false)
       if (!wrote) {
         throw new Error('terminal_not_writable')
       }
       await options.afterWrite?.(ptyId)
       chunk = chunks.next()
+      chunkIndex += 1
       if (!chunk.done) {
         await yieldBetweenTerminalInputChunks()
       }
@@ -20160,6 +21716,7 @@ export class OrcaRuntimeService {
       beforeWrite?: (ptyId: string) => void | Promise<void>
       suffixFailureError?: string
       signal?: AbortSignal
+      operationId?: string
     } = {}
   ): Promise<number> {
     assertAgentPromptRequestActive(options.signal)
@@ -20176,6 +21733,7 @@ export class OrcaRuntimeService {
     let completedPaste = false
     try {
       const chunks = iterateTerminalInputChunks(pastePayload)
+      let chunkIndex = 0
       let chunk = chunks.next()
       while (!chunk.done) {
         const nextChunk = chunks.next()
@@ -20191,12 +21749,19 @@ export class OrcaRuntimeService {
         if (nextChunk.done) {
           renderGate?.arm()
         }
-        const wrote = this.ptyController?.write(ptyId, chunk.value) ?? false
+        const chunkOperationId = options.operationId
+          ? operationIdForChunk(options.operationId, chunkIndex)
+          : undefined
+        const wrote = chunkOperationId
+          ? (this.ptyController?.write(ptyId, chunk.value, { operationId: chunkOperationId }) ??
+            false)
+          : (this.ptyController?.write(ptyId, chunk.value) ?? false)
         if (!wrote) {
           throw new Error('terminal_not_writable')
         }
         wrotePasteBytes = true
         chunk = nextChunk
+        chunkIndex += 1
         if (!chunk.done) {
           await yieldBetweenTerminalInputChunks()
         }
@@ -20240,7 +21805,12 @@ export class OrcaRuntimeService {
     this.assertAgentPromptGeneration(ptyId, generation)
     const baseline = this.getAgentPromptActivity(handle, ptyId)
     this.assertAgentPromptPermissionSafe(permissionBaseline, baseline)
-    const suffixWrote = this.ptyController?.write(ptyId, AGENT_PROMPT_SUBMIT) ?? false
+    const suffixOperationId = options.operationId ? `${options.operationId}:suffix` : undefined
+    const suffixWrote = suffixOperationId
+      ? (this.ptyController?.write(ptyId, AGENT_PROMPT_SUBMIT, {
+          operationId: suffixOperationId
+        }) ?? false)
+      : (this.ptyController?.write(ptyId, AGENT_PROMPT_SUBMIT) ?? false)
     if (!suffixWrote) {
       throw new Error(options.suffixFailureError ?? 'terminal_not_writable')
     }
@@ -21380,6 +22950,119 @@ export class OrcaRuntimeService {
 
   listRepos(): Repo[] {
     return this.store?.getRepos() ?? []
+  }
+
+  async importOrcadMigrationCatalog(
+    manifest: OrcadMigrationManifest,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<OrcadMigrationImportResult> {
+    const store = this.store
+    const importCatalog = store?.importOrcadMigrationCatalog
+    const flushPending = store?.flushPendingOrThrowAsync
+    if (!store || !importCatalog || !flushPending) {
+      throw new Error('runtime_unavailable')
+    }
+    return importOrcadMigrationCatalogDurably({
+      store: {
+        importOrcadMigrationCatalog: (input, inputOptions) =>
+          importCatalog.call(store, input, inputOptions),
+        flushPendingOrThrowAsync: (flushOptions) => flushPending.call(store, flushOptions)
+      },
+      manifest,
+      signal: options.signal,
+      onDurableImport: () => {
+        this.invalidateResolvedWorktreeCache()
+        this.notifyReposChanged()
+      }
+    })
+  }
+
+  async stageOrcadMigrationCatalog(
+    manifest: OrcadMigrationManifest,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<OrcadMigrationCatalogState> {
+    const store = this.store
+    const stage = store?.stageOrcadMigrationCatalog
+    const flush = store?.flushPendingOrThrowAsync
+    if (!store || !stage || !flush) {
+      throw new Error('runtime_unavailable')
+    }
+    return stageOrcadMigrationCatalogDurably({
+      store: {
+        stageOrcadMigrationCatalog: (input, inputOptions) => stage.call(store, input, inputOptions),
+        flushPendingOrThrowAsync: (flushOptions) => flush.call(store, flushOptions)
+      },
+      manifest,
+      signal: options.signal
+    })
+  }
+
+  async commitStagedOrcadMigrationCatalog(
+    manifest: OrcadMigrationManifest,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<OrcadMigrationCatalogState> {
+    const store = this.store
+    const commit = store?.commitStagedOrcadMigrationCatalog
+    const flush = store?.flushPendingOrThrowAsync
+    if (!store || !commit || !flush) {
+      throw new Error('runtime_unavailable')
+    }
+    return commitStagedOrcadMigrationCatalogDurably({
+      store: {
+        commitStagedOrcadMigrationCatalog: (input, inputOptions) =>
+          commit.call(store, input, inputOptions),
+        flushPendingOrThrowAsync: (flushOptions) => flush.call(store, flushOptions)
+      },
+      manifest,
+      signal: options.signal,
+      onDurableCommit: () => {
+        this.invalidateResolvedWorktreeCache()
+        this.notifyReposChanged()
+      }
+    })
+  }
+
+  stageOrcadMigrationSnapshotChunk(
+    request: OrcadMigrationSnapshotChunkRequest
+  ): OrcadMigrationSnapshotChunkResult {
+    const store = this.store
+    const stageChunk = store?.stageOrcadMigrationSnapshotChunk
+    if (!store || !stageChunk) {
+      throw new Error('runtime_unavailable')
+    }
+    return stageChunk.call(store, request)
+  }
+
+  async abortStagedOrcadMigrationCatalog(
+    manifest: OrcadMigrationManifest,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<OrcadMigrationCatalogAbortResult> {
+    const store = this.store
+    const abort = store?.abortStagedOrcadMigrationCatalog
+    const flush = store?.flushPendingOrThrowAsync
+    if (!store || !abort || !flush) {
+      throw new Error('runtime_unavailable')
+    }
+    return abortStagedOrcadMigrationCatalogDurably({
+      store: {
+        abortStagedOrcadMigrationCatalog: (input) => abort.call(store, input),
+        flushPendingOrThrowAsync: (flushOptions) => flush.call(store, flushOptions)
+      },
+      manifest,
+      signal: options.signal
+    })
+  }
+
+  getOrcadMigrationCatalogState(manifest: OrcadMigrationManifest): OrcadMigrationCatalogState {
+    const store = this.store
+    const readState = store?.getOrcadMigrationCatalogState
+    if (!store || !readState) {
+      throw new Error('runtime_unavailable')
+    }
+    return getOrcadMigrationCatalogState({
+      store: { getOrcadMigrationCatalogState: (input) => readState.call(store, input) },
+      manifest
+    })
   }
 
   // Why a stable field and not a per-call closure: enrichment dedupes coalesced callers by callback
@@ -30683,34 +32366,76 @@ export class OrcaRuntimeService {
             localPtyTeardownOwnedExternally: true
           })
         } catch (error) {
-          if (!(error instanceof Error) || error.message !== 'workspace_session_unavailable') {
+          if (
+            !(error instanceof Error) ||
+            (error.message !== 'workspace_session_unavailable' && error.message !== 'tab_not_found')
+          ) {
             throw error
           }
-          this.notifier.closeTerminal?.(tabId)
+          if (error.message === 'tab_not_found') {
+            if (!this.isRuntimeOwnedHeadlessMobileTab(pty.pty.worktreeId, surface.tab)) {
+              throw error
+            }
+            const remainingSnapshot = this.mobileSessionTabsByWorktree.get(pty.pty.worktreeId)
+            if (remainingSnapshot) {
+              this.closeHeadlessMobileTerminalTab(
+                pty.pty.worktreeId,
+                remainingSnapshot,
+                surface.tab,
+                { allowMissingPersistedTab: true, killPtys: false }
+              )
+            } else {
+              this.removePersistedHeadlessTerminalTab(pty.pty.worktreeId, tabId, {
+                allowMissing: true
+              })
+            }
+            this.store?.flushOrThrow?.()
+          }
+          this.notifyRendererOfHeadlessTerminalClose(tabId)
+          const ptyKilled = await this.stopExplicitlyClosedTabPtys([pty.pty.ptyId], pty.pty.ptyId)
+          return this.describeTerminalClose(handle, tabId, pty.pty.ptyId, ptyKilled)
         }
         const ptyKilled = await this.stopExplicitlyClosedTabPtys(ptyIdsToKill, pty.pty.ptyId)
         return this.describeTerminalClose(handle, tabId, pty.pty.ptyId, ptyKilled)
       }
-      if (siblingCount <= 1 && !surface && pty.pty.tabId && this.notifier?.closeTerminalTab) {
+      if (
+        siblingCount <= 1 &&
+        !surface &&
+        pty.pty.tabId &&
+        this.tabs.has(tabId) &&
+        this.notifier?.closeTerminalTab
+      ) {
         const ptyIdsToKill = this.getPtyIdsForExplicitTabClose(pty.pty.worktreeId, tabId)
-        await this.notifier.closeTerminalTab(tabId, { localPtyTeardownOwnedExternally: true })
-        const ptyKilled = await this.stopExplicitlyClosedTabPtys(ptyIdsToKill, pty.pty.ptyId)
-        return this.describeTerminalClose(handle, tabId, pty.pty.ptyId, ptyKilled)
+        try {
+          await this.notifier.closeTerminalTab(tabId, { localPtyTeardownOwnedExternally: true })
+          const ptyKilled = await this.stopExplicitlyClosedTabPtys(ptyIdsToKill, pty.pty.ptyId)
+          return this.describeTerminalClose(handle, tabId, pty.pty.ptyId, ptyKilled)
+        } catch (error) {
+          if (!(error instanceof Error) || error.message !== 'tab_not_found') {
+            throw error
+          }
+        }
       }
       const ptyKilled = await this.stopExplicitlyClosedTabPtys([pty.pty.ptyId], pty.pty.ptyId)
       if (!ptyKilled || siblingCount <= 1) {
         if (surface) {
           // Why: paired viewers keep ended streams mounted until the HUB publishes removal, so explicit close uses the durable host-tab transaction instead of viewer-local exit handling.
           try {
-            await this.closeMobileSessionTab(`id:${pty.pty.worktreeId}`, tabId)
+            await this.closeMobileSessionTab(`id:${pty.pty.worktreeId}`, tabId, {
+              localPtyTeardownOwnedExternally: true
+            })
           } catch (error) {
-            if (!(error instanceof Error) || error.message !== 'workspace_session_unavailable') {
+            if (
+              !(error instanceof Error) ||
+              (error.message !== 'workspace_session_unavailable' &&
+                error.message !== 'tab_not_found')
+            ) {
               throw error
             }
-            this.notifier?.closeTerminal(tabId)
+            this.notifyRendererOfHeadlessTerminalClose(tabId)
           }
         } else {
-          this.notifier?.closeTerminal(tabId)
+          this.notifyRendererOfHeadlessTerminalClose(tabId)
         }
       }
       return this.describeTerminalClose(handle, tabId, pty.pty.ptyId, ptyKilled)
@@ -42154,6 +43879,10 @@ function maxTimestamp(left: number | null, right: number | null): number | null 
     return left
   }
   return Math.max(left, right)
+}
+
+function operationIdForChunk(operationId: string, index: number): string {
+  return index === 0 ? operationId : `${operationId}:chunk:${index}`
 }
 
 function compareWorktreePs(

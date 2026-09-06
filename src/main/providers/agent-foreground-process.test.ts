@@ -305,6 +305,17 @@ describe('resolveAgentForegroundProcess', () => {
     expect(getAllProcessesMock).not.toHaveBeenCalled()
   })
 
+  it('confirms a Windows Bun shell after its ownership gate is normalized away', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+
+    await expect(
+      confirmShellForegroundProcess(100, 'powershell.exe', {
+        jobRootProcessIsWrapper: true,
+        readWindowsPtyJobProcessIds: async () => new Set([200])
+      })
+    ).resolves.toBe(true)
+  })
+
   it('rejects Windows shell ownership with a child or unavailable membership', async () => {
     Object.defineProperty(process, 'platform', { value: 'win32' })
 

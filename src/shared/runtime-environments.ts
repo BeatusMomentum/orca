@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { PAIRING_OFFER_VERSION, type PairingOffer } from './pairing'
+import { classifyRemotePairingHostname } from './remote-pairing-address'
 
 export const RuntimeAccessEndpointSchema = z.object({
   id: z.string().min(1),
@@ -20,6 +21,15 @@ export type PublicRuntimeAccessEndpoint = z.infer<typeof PublicRuntimeAccessEndp
 export const RuntimeEnvironmentSourceSchema = z.enum(['manual', 'ephemeral-vm'])
 export type RuntimeEnvironmentSource = z.infer<typeof RuntimeEnvironmentSourceSchema>
 
+export const OrcadDeploymentLinkSchema = z.object({
+  sshTargetId: z.string().min(1),
+  sshTargetGeneration: z.number().int().positive(),
+  localPort: z.number().int().min(1).max(65_535),
+  remotePort: z.number().int().min(1).max(65_535)
+})
+
+export type OrcadDeploymentLink = z.infer<typeof OrcadDeploymentLinkSchema>
+
 export const KnownRuntimeEnvironmentSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -31,6 +41,7 @@ export const KnownRuntimeEnvironmentSchema = z.object({
   runtimeId: z.string().min(1).nullable(),
   source: RuntimeEnvironmentSourceSchema.optional(),
   connectionDependency: z.literal('ssh-tunnel').optional(),
+  orcadDeployment: OrcadDeploymentLinkSchema.optional(),
   endpoints: z.array(RuntimeAccessEndpointSchema).min(1),
   preferredEndpointId: z.string().min(1)
 })
@@ -67,6 +78,7 @@ export function createEnvironmentFromPairingOffer(args: {
   runtimeId?: string | null
   source?: RuntimeEnvironmentSource
   connectionDependency?: 'ssh-tunnel'
+  orcadDeployment?: OrcadDeploymentLink
 }): KnownRuntimeEnvironment {
   const endpointId = `ws-${args.id}`
   return KnownRuntimeEnvironmentSchema.parse({
@@ -80,6 +92,7 @@ export function createEnvironmentFromPairingOffer(args: {
     runtimeId: args.runtimeId ?? null,
     ...(args.source ? { source: args.source } : {}),
     ...(args.connectionDependency ? { connectionDependency: args.connectionDependency } : {}),
+    ...(args.orcadDeployment ? { orcadDeployment: args.orcadDeployment } : {}),
     endpoints: [
       {
         id: endpointId,
@@ -98,6 +111,12 @@ export function isEphemeralVmRuntimeEnvironment(
   environment: Pick<PublicKnownRuntimeEnvironment, 'source'>
 ): boolean {
   return environment.source === 'ephemeral-vm'
+}
+
+export function isManagedOrcadRuntimeEnvironment(
+  environment: Pick<PublicKnownRuntimeEnvironment, 'orcadDeployment'>
+): boolean {
+  return environment.orcadDeployment !== undefined
 }
 
 export function isUserManagedRuntimeEnvironment(
@@ -119,5 +138,28 @@ export function getPreferredPairingOffer(environment: KnownRuntimeEnvironment): 
     deviceToken: endpoint.deviceToken,
     publicKeyB64: endpoint.publicKeyB64,
     ...(environment.pairedDeviceId ? { pairedDeviceId: environment.pairedDeviceId } : {})
+  }
+}
+
+export function getPreferredLoopbackRuntimePort(
+  environment: KnownRuntimeEnvironment
+): number | null {
+  const endpoint = environment.endpoints.find(
+    (entry) => entry.id === environment.preferredEndpointId
+  )
+  if (!endpoint) {
+    return null
+  }
+  try {
+    const url = new URL(endpoint.endpoint)
+    const port = Number(url.port)
+    return classifyRemotePairingHostname(url.hostname) === 'loopback' &&
+      Number.isInteger(port) &&
+      port >= 1 &&
+      port <= 65_535
+      ? port
+      : null
+  } catch {
+    return null
   }
 }

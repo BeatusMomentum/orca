@@ -1,8 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { connect, createServer, type AddressInfo, type Socket } from 'node:net'
+import { connect, type Socket } from 'node:net'
 import type { SshTarget } from '../../shared/ssh-types'
 import { buildSshArgs, findSystemSsh, type SystemSshBuildArgsOptions } from './ssh-system-fallback'
 import { waitForSystemSshForwardStop } from './system-ssh-forward-process'
+import { allocateLoopbackPort } from './loopback-port-allocation'
 
 const STARTUP_TIMEOUT_MS = 10_000
 const PROBE_INTERVAL_MS = 50
@@ -82,22 +83,6 @@ export async function startSystemSshDynamicForwardProcess(
       }
     }
   }
-}
-
-function allocateLoopbackPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer()
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address() as AddressInfo | null
-      if (!address) {
-        server.close()
-        reject(new Error('system_ssh_dynamic_forward_port_unavailable'))
-        return
-      }
-      server.close((error) => (error ? reject(error) : resolve(address.port)))
-    })
-  })
 }
 
 function waitForDynamicForward(

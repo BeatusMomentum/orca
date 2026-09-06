@@ -3,6 +3,7 @@ import {
   isTerminalInputTooLargeWithDeferredMeasurement,
   iterateTerminalInputChunks
 } from '../../../../shared/terminal-input'
+import type { PtyInputOperationOptions } from './pty-transport-types'
 
 // Why: 4096 UTF-16 code units encode to at most ~12KB UTF-8, safely under the
 // 16KB TERMINAL_INPUT_CHUNK_MAX_BYTES cap without paying byte measurement on
@@ -19,29 +20,35 @@ type PendingPtyInputWrite = {
   sequence: number
   id: string
   text: string
+  operationId?: string
   replyOnly: boolean
   tooLarge: boolean | Promise<boolean>
   chunks?: Iterator<string>
   nextChunk?: string
+  nextChunkIndex?: number
 }
 
 export type PtyInputWriteQueue = {
-  enqueue: (id: string, data: string) => boolean
-  enqueueQueryReply: (id: string, data: string) => boolean
+  enqueue: (id: string, data: string, options?: PtyInputOperationOptions) => boolean
+  enqueueQueryReply: (id: string, data: string, options?: PtyInputOperationOptions) => boolean
   waitForDrain: () => Promise<void>
   clear: () => void
 }
 
 export type PtyInputWriteQueueDeps = {
   isWritable: (id: string) => boolean
-  write: (id: string, data: string) => void
+  write: (id: string, data: string, options?: PtyInputOperationOptions) => void
   yieldBetweenWrites?: () => Promise<void>
   onDrainFailure?: (id: string) => void
 }
 
 function isCoalescibleInput(input: PendingPtyInputWrite): boolean {
   // Echo-risk replies stay atomic so host classifiers cannot miss them (#13137).
-  return input.text.length <= TERMINAL_INPUT_COALESCE_MAX_CODE_UNITS && !input.replyOnly
+  return (
+    input.text.length <= TERMINAL_INPUT_COALESCE_MAX_CODE_UNITS &&
+    !input.replyOnly &&
+    input.operationId === undefined
+  )
 }
 
 export function createPtyInputWriteQueue(deps: PtyInputWriteQueueDeps): PtyInputWriteQueue {
@@ -215,12 +222,20 @@ export function createPtyInputWriteQueue(deps: PtyInputWriteQueueDeps): PtyInput
           removePending(next)
           continue
         }
-        deps.write(next.id, chunk.value)
+        const chunkIndex = next.nextChunkIndex ?? 0
+        deps.write(
+          next.id,
+          chunk.value,
+          next.operationId === undefined
+            ? undefined
+            : { operationId: chunkOperationId(next.operationId, chunkIndex) }
+        )
         const following = next.chunks.next()
         if (following.done) {
           removePending(next)
         } else {
           next.nextChunk = following.value
+          next.nextChunkIndex = chunkIndex + 1
         }
         if (firstPending()) {
           await yieldBetweenWrites()
@@ -256,7 +271,12 @@ export function createPtyInputWriteQueue(deps: PtyInputWriteQueueDeps): PtyInput
     drainPromise = drain().finally(finishDrain)
   }
 
-  function enqueueInput(id: string, data: string, queryReply: boolean): boolean {
+  function enqueueInput(
+    id: string,
+    data: string,
+    queryReply: boolean,
+    options?: PtyInputOperationOptions
+  ): boolean {
     try {
       if (failedGeneration === generation) {
         return false
@@ -270,7 +290,14 @@ export function createPtyInputWriteQueue(deps: PtyInputWriteQueueDeps): PtyInput
       if (tooLarge === true) {
         return false
       }
-      const item = { sequence: nextSequence, id, text: data, replyOnly, tooLarge }
+      const item = {
+        sequence: nextSequence,
+        id,
+        text: data,
+        replyOnly,
+        tooLarge,
+        ...(options?.operationId ? { operationId: options.operationId } : {})
+      }
       nextSequence += 1
       if (replyOnly) {
         pendingReplies.push(item)
@@ -287,12 +314,12 @@ export function createPtyInputWriteQueue(deps: PtyInputWriteQueueDeps): PtyInput
   }
 
   return {
-    enqueue(id: string, data: string): boolean {
-      return enqueueInput(id, data, false)
+    enqueue(id: string, data: string, options?: PtyInputOperationOptions): boolean {
+      return enqueueInput(id, data, false, options)
     },
 
-    enqueueQueryReply(id: string, data: string): boolean {
-      return enqueueInput(id, data, true)
+    enqueueQueryReply(id: string, data: string, options?: PtyInputOperationOptions): boolean {
+      return enqueueInput(id, data, true, options)
     },
 
     async waitForDrain(): Promise<void> {
@@ -307,4 +334,8 @@ export function createPtyInputWriteQueue(deps: PtyInputWriteQueueDeps): PtyInput
       clearPending()
     }
   }
+}
+
+function chunkOperationId(operationId: string, index: number): string {
+  return index === 0 ? operationId : `${operationId}:chunk:${index}`
 }

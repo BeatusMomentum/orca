@@ -1,6 +1,7 @@
 import type { SshChannelMultiplexer } from '../ssh/ssh-channel-multiplexer'
 import type { PtySourceReceivingActivation } from '../../shared/pty-source-receiving-activation'
 import type { SshPtySourceFrame } from './ssh-pty-source-frame'
+import type { PtyOwnershipTransferOutputEnvelope } from '../../shared/pty-ownership-transfer-output-envelope'
 
 export type PendingSshPtySourceData = Readonly<{
   relayPtyId: string
@@ -19,6 +20,12 @@ export type SourceDeliveryLeaseState = {
 export type SourceDeliveryState = Readonly<{
   activation: PtySourceReceivingActivation
   sourceEndSu: number
+  ownershipTransfer?: PtyOwnershipTransferOutputEnvelope
+  ownershipTransferProgress?: Readonly<{
+    frameSeq: number
+    frameLengthSu: number
+    fragmentEndSu: number
+  }>
   lease: SourceDeliveryLeaseState
   previous?: SourceDeliveryState
 }>
@@ -102,7 +109,46 @@ export function acceptsSourceFrame(
     current.activation.deliveryToken === source.deliveryToken &&
     current.activation.clientGeneration === source.clientGeneration &&
     current.activation.ownerGeneration === source.ownerGeneration &&
-    current.sourceEndSu === source.sourceStartSu
+    current.sourceEndSu === source.sourceStartSu &&
+    (!source.ownershipTransfer ||
+      !current.ownershipTransfer ||
+      sameOwnershipTransferIdentity(current.ownershipTransfer, source.ownershipTransfer)) &&
+    acceptsOwnershipTransferProgress(current.ownershipTransferProgress, source.ownershipTransfer)
+  )
+}
+
+function acceptsOwnershipTransferProgress(
+  progress: SourceDeliveryState['ownershipTransferProgress'],
+  envelope: PtyOwnershipTransferOutputEnvelope | undefined
+): boolean {
+  if (!envelope || !progress) {
+    return true
+  }
+  if (envelope.frameSeq === progress.frameSeq) {
+    return (
+      envelope.frameLengthSu === progress.frameLengthSu &&
+      envelope.fragmentStartSu === progress.fragmentEndSu
+    )
+  }
+  return (
+    progress.fragmentEndSu === progress.frameLengthSu &&
+    envelope.frameSeq === progress.frameSeq + 1 &&
+    envelope.fragmentStartSu === 0
+  )
+}
+
+function sameOwnershipTransferIdentity(
+  left: PtyOwnershipTransferOutputEnvelope,
+  right: PtyOwnershipTransferOutputEnvelope
+): boolean {
+  return (
+    left.bridgeId === right.bridgeId &&
+    left.terminalId === right.terminalId &&
+    left.incarnationId === right.incarnationId &&
+    left.ownerLease === right.ownerLease &&
+    left.sourceOwnerGeneration === right.sourceOwnerGeneration &&
+    left.destinationRuntimeId === right.destinationRuntimeId &&
+    left.version === right.version
   )
 }
 

@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { resolveBaselineReleaseRef, selectLatestStableReleaseTag } from './release-checkout'
 import {
   JOURNEY_INPUTS,
@@ -42,17 +42,33 @@ const EXPECTED_JOURNEY_FRAMES = [
 let baselineRef: string
 let current: TerminalWireBuild
 let baseline: TerminalWireBuild
+const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window')
+
+function restoreOriginalWindow(): void {
+  if (originalWindowDescriptor) {
+    Object.defineProperty(globalThis, 'window', originalWindowDescriptor)
+    return
+  }
+  Reflect.deleteProperty(globalThis, 'window')
+}
 
 beforeAll(async () => {
-  baselineRef = resolveBaselineReleaseRef()
-  current = await loadTerminalWireBuild(WORKING_TREE)
-  baseline = await loadTerminalWireBuild(baselineRef)
+  try {
+    baselineRef = resolveBaselineReleaseRef()
+    current = await loadTerminalWireBuild(WORKING_TREE)
+    baseline = await loadTerminalWireBuild(baselineRef)
+  } finally {
+    // Some host builds install the daemon's Node xterm polyfill while their modules load.
+    restoreOriginalWindow()
+  }
 }, SUITE_TIMEOUT_MS)
 
 afterEach(() => {
   // Each journey installs and removes its own window stub; fail loudly if one leaked.
-  expect(typeof globalThis.window).toBe('undefined')
+  expect(Object.getOwnPropertyDescriptor(globalThis, 'window')).toEqual(originalWindowDescriptor)
 })
+
+afterAll(restoreOriginalWindow)
 
 function expectJourneyActuallyRan(record: JourneyRecord): void {
   // The anti-vacuous-pass oracle. A harness that connects and then does nothing
@@ -89,6 +105,21 @@ function expectWireCompatible(record: JourneyRecord): void {
   for (const start of record.snapshotStarts) {
     expect(start).toMatchObject({ kind: 'scrollback', cols: 120, rows: 40, source: 'headless' })
   }
+}
+
+function expectBaselineSnapshotMetadata(record: JourneyRecord): void {
+  const publishesOwnership = record.snapshotStarts.map((start) => {
+    if (start.terminalOwner === 'shell') {
+      expect(start).toMatchObject({ alternateScreen: false, terminalOwner: 'shell' })
+      return true
+    }
+    expect(start).not.toHaveProperty('terminalOwner')
+    expect(start).not.toHaveProperty('alternateScreen')
+    return false
+  })
+
+  // The moving stable baseline may predate or include these Rule 1 fields.
+  expect(new Set(publishesOwnership).size).toBe(1)
 }
 
 describe('cross-version remote terminal wire', () => {
@@ -152,10 +183,7 @@ describe('cross-version remote terminal wire', () => {
       expect(record.hostRevision).toBe(baseline.revision)
       expectJourneyActuallyRan(record)
       expectWireCompatible(record)
-      for (const start of record.snapshotStarts) {
-        expect(start).not.toHaveProperty('terminalOwner')
-        expect(start).not.toHaveProperty('alternateScreen')
-      }
+      expectBaselineSnapshotMetadata(record)
     },
     SUITE_TIMEOUT_MS
   )

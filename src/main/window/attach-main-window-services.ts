@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 
 import { app, ipcMain } from 'electron'
 import type { BrowserWindow, IpcMainInvokeEvent } from 'electron'
-import type { Store } from '../persistence'
+import { getCanonicalUserDataPath, type Store } from '../persistence'
 import type { ReleaseBuildListResult, UpdateCheckOptions } from '../../shared/update-status-types'
 import type { CreateWorktreeResult } from '../../shared/worktree/create-types'
 import type { WorktreeStartupLaunch } from '../../shared/worktree/launch-types'
@@ -159,7 +159,7 @@ export function attachMainWindowServices(
         )
       })
   }
-  registerSshHandlers(store, () => mainWindow, runtime)
+  registerSshHandlers(store, () => mainWindow, runtime, getCanonicalUserDataPath)
   registerRemoteWorkspaceHandlers(store, () => mainWindow)
   registerFileDropRelay(mainWindow)
   registerTccPromptNoticeHandlers(mainWindow)

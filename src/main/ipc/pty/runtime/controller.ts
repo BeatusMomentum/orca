@@ -41,7 +41,7 @@ export function installPtyRuntimeController(deps: PtyRuntimeControllerDeps): voi
     },
     adoptStablePane,
     spawn: async (args) => spawnPtyFromRuntimeController(deps, args),
-    write: (ptyId, data) => writePtyFromRuntimeController(ptyId, data),
+    write: (ptyId, data, retry) => writePtyFromRuntimeController(ptyId, data, retry),
     probePtyLiveness: (ptyId) => probePtyLivenessFromRuntimeController(deps, ptyId),
     // Why: subscriber-driven ingestion for daemon sessions no renderer pane
     // ever attached. Local daemon sessions only — SSH panes have their own

@@ -149,6 +149,8 @@ describe('Electron runtime package contract', () => {
     expect(scripts['build:mac']).toContain('pnpm run build:keyboard-layout-macos')
     expect(scripts['build:release']).toContain('pnpm run build:native')
     expect(scripts['build:release']).not.toContain('build:computer-macos')
+    expect(scripts['build:release']).toContain('pnpm run build:relay:release')
+    expect(scripts['build:release:parallel']).toContain('pnpm run build:relay:release')
   })
 
   it('runs the web build through the heap-sized Vite wrapper', () => {

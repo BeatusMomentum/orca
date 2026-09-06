@@ -1,4 +1,5 @@
 import type { IPtyProvider } from '../../../providers/types'
+import type { PtyProviderOperationRetry } from '../../../providers/pty-provider-contract'
 import { LocalPtyProvider } from '../../../providers/local-pty-provider'
 import type { PtyProcessInfo } from '../../../providers/pty-process-info'
 import { parseAppSshPtyId } from '../../../providers/ssh-pty-id'
@@ -19,9 +20,18 @@ import {
 import { inspectPtyProviderProcess } from '../../../providers/pty-process-inspection'
 import type { PtyRuntimeControllerDeps } from './controller-deps'
 
-export function writePtyFromRuntimeController(ptyId: string, data: string): boolean {
+export function writePtyFromRuntimeController(
+  ptyId: string,
+  data: string,
+  retry?: PtyProviderOperationRetry
+): boolean {
   try {
-    getProviderForPty(ptyId).write(ptyId, data)
+    const provider = getProviderForPty(ptyId)
+    if (retry) {
+      provider.write(ptyId, data, retry)
+    } else {
+      provider.write(ptyId, data)
+    }
     return true
   } catch {
     return false

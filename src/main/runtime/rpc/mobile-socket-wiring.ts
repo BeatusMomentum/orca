@@ -39,6 +39,7 @@ export type AuthenticatedMobileSocket = {
   device: E2EEAuthenticatedDevice
   clientCapabilities: readonly RuntimeCapability[]
   transport: MobileSocketTransportMetadata
+  connectionGeneration: number
 }
 
 type MobileSocketWiringOptions = {
@@ -76,6 +77,7 @@ export class MobileSocketWiring {
   private readonly channels = new Map<WebSocket, E2EEChannel>()
   private readonly connectionIds = new Map<WebSocket, string>()
   private readonly authenticatedSockets = new Map<WebSocket, AuthenticatedMobileSocket>()
+  private readonly connectionGenerations = new Map<string, number>()
   private readonly transports = new Set<MobileSocketTransport>()
   private readonly outboundMemoryBudget = createMobileE2EEOutboundMemoryBudget()
 
@@ -161,12 +163,15 @@ export class MobileSocketWiring {
           return toAuthenticatedDevice(device)
         },
         onReady: (channel, device) => {
+          const connectionGeneration = (this.connectionGenerations.get(device.deviceId) ?? 0) + 1
+          this.connectionGenerations.set(device.deviceId, connectionGeneration)
           const socket = {
             ws,
             connectionId,
             device,
             clientCapabilities: channel.clientCapabilities,
-            transport: metadata
+            transport: metadata,
+            connectionGeneration
           }
           this.authenticatedSockets.set(ws, socket)
           transport.setClientId(ws, device.deviceToken)

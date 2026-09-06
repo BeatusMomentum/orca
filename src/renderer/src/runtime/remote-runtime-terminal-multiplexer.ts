@@ -153,7 +153,12 @@ export type RemoteRuntimeSnapshotOutcome = {
 
 export type RemoteRuntimeMultiplexedTerminal = {
   streamId: number
-  sendInput: (text: string) => boolean
+  /**
+   * Sends over the binary stream when no retry identity is supplied. Stable
+   * operation IDs force the caller onto the unary terminal.send fallback,
+   * because legacy stream decoders cannot carry an ID safely.
+   */
+  sendInput: (text: string, options?: { operationId?: string }) => boolean
   resize: (cols: number, rows: number) => boolean
   claimViewport: (cols: number, rows: number) => boolean
   setOutputPaused: (paused: boolean) => boolean
@@ -495,7 +500,8 @@ class RemoteRuntimeTerminalMultiplexer {
 
     const stream: RemoteRuntimeMultiplexedTerminal = {
       streamId,
-      sendInput: (text) => this.isRegisteredStream(state) && this.sendInput(state, text),
+      sendInput: (text, options) =>
+        this.isRegisteredStream(state) && this.sendInput(state, text, options),
       resize: (cols, rows) =>
         this.isRegisteredStream(state) &&
         this.sendFrame(
@@ -1230,7 +1236,16 @@ class RemoteRuntimeTerminalMultiplexer {
     return this.streams.get(stream.streamId) === stream
   }
 
-  private sendInput(stream: RemoteRuntimeMultiplexedTerminalState, text: string): boolean {
+  private sendInput(
+    stream: RemoteRuntimeMultiplexedTerminalState,
+    text: string,
+    options?: { operationId?: string }
+  ): boolean {
+    // A new stream opcode/field would be silently dropped by old hosts. Let
+    // the transport use its additive unary terminal.send path instead.
+    if (options?.operationId) {
+      return false
+    }
     const sent = this.sendFrame(
       stream.streamId,
       TerminalStreamOpcode.Input,

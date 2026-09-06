@@ -70,7 +70,11 @@ export const REMOTE_INSTALL_MODELS: readonly RemoteInstallModel[] = [
  * PowerShell `-match` on the remote host. Those three dialects agree on `[0-9]`, `\.` and
  * `\+`; only JavaScript understands `\d`.
  */
-const VERSION_PATTERN = String.raw`v?[0-9]+\.[0-9]+\.[0-9]+(\+[0-9a-f]+)?`
+const VERSION_PATTERN =
+  String.raw`v?[0-9]+\.[0-9]+\.[0-9]+` +
+  String.raw`(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?` +
+  String.raw`(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?`
+const VERSION_REGEX = new RegExp(`^${VERSION_PATTERN}$`)
 
 /** Suffix GC leaves behind mid-delete; the listing must surface these so they can be swept. */
 const TOMBSTONE_PATTERN = String.raw`\.gc-tombstone\.[0-9]+\.[0-9]+`
@@ -88,13 +92,25 @@ function assertSafeDirPrefix(dirPrefix: string): void {
 
 export function remoteInstallDirName(model: RemoteInstallModel, fullVersion: string): string {
   assertSafeDirPrefix(model.dirPrefix)
+  if (!isRemoteInstallVersion(fullVersion)) {
+    throw new Error(`Unsafe remote install version: ${JSON.stringify(fullVersion)}`)
+  }
   return `${model.dirPrefix}-${fullVersion}`
+}
+
+export function isRemoteInstallVersion(fullVersion: string): boolean {
+  return fullVersion.length <= 255 && VERSION_REGEX.test(fullVersion)
 }
 
 /** Matches a live version dir for exactly one model — never a tombstone, never a sibling model. */
 export function remoteInstallVersionDirRegex(model: RemoteInstallModel): RegExp {
   assertSafeDirPrefix(model.dirPrefix)
   return new RegExp(`^${model.dirPrefix}-(${VERSION_PATTERN})$`)
+}
+
+export function remoteInstallGcTombstoneRegex(model: RemoteInstallModel): RegExp {
+  assertSafeDirPrefix(model.dirPrefix)
+  return new RegExp(`^${model.dirPrefix}-(${VERSION_PATTERN})${TOMBSTONE_PATTERN}$`)
 }
 
 /** What the remote listing is allowed to return: live dirs plus their tombstones. */

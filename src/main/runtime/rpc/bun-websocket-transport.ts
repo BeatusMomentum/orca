@@ -1,17 +1,15 @@
 import type { WebSocket } from 'ws'
 import type { RemoteRuntimeServerHeartbeat } from './remote-runtime-server-heartbeat'
-import { createStaticWebClientResponse } from './static-web-client-handler'
-
-const MAX_WS_CONNECTIONS = 128
-
-type BunServerWebSocket = {
-  data: unknown
-  closed?: boolean
-  send(data: string | ArrayBuffer | ArrayBufferView): number
-  close(code?: number, reason?: string): void
-  terminate(): void
-  ping(data?: string | ArrayBuffer | ArrayBufferView): void
-}
+import {
+  adaptBunSocket,
+  type BunServerWebSocket,
+  type BunSocketAdapter
+} from './bun-websocket-adapter'
+import {
+  WEBSOCKET_TRANSPORT_MAX_BACKPRESSURE_BYTES,
+  WEBSOCKET_TRANSPORT_MAX_CONNECTIONS,
+  WEBSOCKET_TRANSPORT_MAX_MESSAGE_BYTES
+} from './websocket-transport-limits'
 
 type BunServer = {
   hostname: string
@@ -24,23 +22,24 @@ type BunRuntime = {
   serve(options: {
     hostname: string
     port: number
-    tls?: { cert: string; key: string }
-    ['fetch'](request: Request, server: BunServer): Response | Promise<Response> | undefined
+    idleTimeout: number
+    maxRequestBodySize: number
+    fetch(request: Request, server: BunServer): Response | undefined
     websocket: {
       data: Record<string, never>
+      maxPayloadLength: number
+      backpressureLimit: number
+      closeOnBackpressureLimit: boolean
       open(socket: BunServerWebSocket): void
       message(socket: BunServerWebSocket, message: string | ArrayBuffer | Uint8Array): void
+      pong(socket: BunServerWebSocket): void
       close(socket: BunServerWebSocket): void
-      error?(socket: BunServerWebSocket, error: unknown): void
+      error(socket: BunServerWebSocket, error: unknown): void
     }
   }): BunServer
 }
 
 type BunGlobal = typeof globalThis & { Bun?: BunRuntime }
-type BunSocketAdapter = WebSocket & {
-  readonly raw: BunServerWebSocket
-  readonly notify: (event: string, ...args: unknown[]) => void
-}
 
 type BunWebSocketTransportCallbacks = {
   messageHandler: (
@@ -57,58 +56,13 @@ type BunWebSocketTransportCallbacks = {
 
 const getBunRuntime = (): BunRuntime | undefined => (globalThis as BunGlobal).Bun
 
-function adaptBunSocket(socket: BunServerWebSocket): BunSocketAdapter {
-  const listeners = new Map<string, Set<(...args: unknown[]) => void>>()
-  const adapted = {
-    raw: socket,
-    OPEN: 1,
-    get readyState(): number {
-      return socket.closed ? 3 : 1
-    },
-    send(data: string | ArrayBuffer | ArrayBufferView): void {
-      socket.send(data)
-    },
-    close(code?: number, reason?: string): void {
-      socket.close(code, reason)
-    },
-    terminate(): void {
-      socket.terminate()
-    },
-    ping(data?: string | ArrayBuffer | ArrayBufferView): void {
-      socket.ping(data)
-    },
-    on(event: string, listener: (...args: unknown[]) => void): BunSocketAdapter {
-      const eventListeners = listeners.get(event) ?? new Set()
-      eventListeners.add(listener)
-      listeners.set(event, eventListeners)
-      return adapted as BunSocketAdapter
-    },
-    off(event: string, listener: (...args: unknown[]) => void): BunSocketAdapter {
-      listeners.get(event)?.delete(listener)
-      return adapted as BunSocketAdapter
-    },
-    once(event: string, listener: (...args: unknown[]) => void): BunSocketAdapter {
-      const onceListener = (...args: unknown[]) => {
-        listeners.get(event)?.delete(onceListener)
-        listener(...args)
-      }
-      return adapted.on(event, onceListener)
-    },
-    notify(event: string, ...args: unknown[]): void {
-      for (const listener of listeners.get(event) ?? []) {
-        listener(...args)
-      }
-    }
-  } as unknown as BunSocketAdapter
-  return adapted
-}
-
 export function canUseBunWebSocketTransport(): boolean {
   return typeof getBunRuntime()?.serve === 'function'
 }
 
 export class BunWebSocketTransport {
   private server: BunServer | null = null
+  private pendingUpgrades = 0
   private readonly clients = new Set<BunServerWebSocket>()
   private readonly adapters = new WeakMap<BunServerWebSocket, BunSocketAdapter>()
   private readonly adapterClients = new Set<BunSocketAdapter>()
@@ -117,23 +71,17 @@ export class BunWebSocketTransport {
 
   constructor(
     private readonly options: {
-      host: string
-      port: number
-      staticRoot?: string
-      tlsCert?: string
-      tlsKey?: string
       preAuthTimeoutMs: number
       heartbeat: RemoteRuntimeServerHeartbeat
       callbacks: BunWebSocketTransportCallbacks
     }
   ) {}
 
-  get resolvedPort(): number {
-    return this.server?.port ?? this.options.port
-  }
-
-  get resolvedHost(): string | null {
-    return this.server?.hostname ?? null
+  get port(): number {
+    if (!this.server) {
+      throw new Error('Bun WebSocket transport is not started')
+    }
+    return this.server.port
   }
 
   start(): void {
@@ -145,32 +93,46 @@ export class BunWebSocketTransport {
       throw new Error('Bun runtime is unavailable')
     }
     this.server = runtime.serve({
-      hostname: this.options.host,
-      port: this.options.port,
-      ...(this.options.tlsCert && this.options.tlsKey
-        ? { tls: { cert: this.options.tlsCert, key: this.options.tlsKey } }
-        : {}),
+      hostname: '127.0.0.1',
+      port: 0,
+      idleTimeout: 10,
+      maxRequestBodySize: WEBSOCKET_TRANSPORT_MAX_MESSAGE_BYTES,
       fetch: (request, server) => {
-        if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
-          return this.options.staticRoot
-            ? createStaticWebClientResponse(this.options.staticRoot, request)
-            : new Response('Orca runtime WebSocket endpoint', { status: 426 })
+        if (!this.server) {
+          return new Response('WebSocket transport is stopping', { status: 503 })
         }
-        if (this.clients.size >= MAX_WS_CONNECTIONS) {
+        if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
+          return new Response('Orca internal WebSocket endpoint', { status: 426 })
+        }
+        if (this.clients.size + this.pendingUpgrades >= WEBSOCKET_TRANSPORT_MAX_CONNECTIONS) {
           return new Response('Maximum connections reached', { status: 503 })
         }
-        return server.upgrade(request)
-          ? undefined
-          : new Response('WebSocket upgrade failed', { status: 400 })
+        this.pendingUpgrades += 1
+        let upgraded = false
+        try {
+          upgraded = server.upgrade(request)
+          return upgraded ? undefined : new Response('WebSocket upgrade failed', { status: 400 })
+        } finally {
+          // A successful upgrade consumes this reservation in handleOpen. Failed upgrades do not.
+          if (!upgraded) {
+            this.pendingUpgrades = Math.max(0, this.pendingUpgrades - 1)
+          }
+        }
       },
       websocket: {
         data: {} as Record<string, never>,
+        maxPayloadLength: WEBSOCKET_TRANSPORT_MAX_MESSAGE_BYTES,
+        backpressureLimit: WEBSOCKET_TRANSPORT_MAX_BACKPRESSURE_BYTES,
+        closeOnBackpressureLimit: true,
         open: (socket) => this.handleOpen(socket),
         message: (socket, message) => this.handleMessage(socket, message),
-        error: (socket, error) => {
-          this.adapters.get(socket)?.notify('error', error)
-          socket.terminate()
+        pong: (socket) => {
+          const adapter = this.adapters.get(socket)
+          if (adapter) {
+            this.options.heartbeat.noteAlive(adapter)
+          }
         },
+        error: (socket, error) => this.handleError(socket, error),
         close: (socket) => this.handleClose(socket)
       }
     })
@@ -198,6 +160,7 @@ export class BunWebSocketTransport {
   async stop(): Promise<void> {
     const server = this.server
     this.server = null
+    this.pendingUpgrades = 0
     if (!server) {
       return
     }
@@ -205,13 +168,29 @@ export class BunWebSocketTransport {
     for (const socket of this.clients) {
       socket.terminate()
     }
-    await server.stop({ closeActiveConnections: true })
-    for (const socket of this.clients) {
-      this.handleClose(socket)
+    try {
+      await server.stop({ closeActiveConnections: true })
+    } finally {
+      for (const socket of Array.from(this.clients)) {
+        this.handleClose(socket)
+      }
     }
   }
 
   private handleOpen(socket: BunServerWebSocket): void {
+    if (this.pendingUpgrades > 0) {
+      this.pendingUpgrades -= 1
+    }
+    if (!this.server) {
+      socket.terminate()
+      return
+    }
+    if (this.clients.size >= WEBSOCKET_TRANSPORT_MAX_CONNECTIONS) {
+      socket.close(1013, 'Maximum connections reached')
+      const timer = setTimeout(() => socket.terminate(), 1_000)
+      timer.unref?.()
+      return
+    }
     const adapter = adaptBunSocket(socket)
     this.clients.add(socket)
     this.adapters.set(socket, adapter)
@@ -259,7 +238,6 @@ export class BunWebSocketTransport {
     if (!adapter) {
       return
     }
-    adapter.notify('close')
     this.clearPreAuthTimer(adapter)
     this.adapterClients.delete(adapter)
     this.adapters.delete(socket)
@@ -270,7 +248,23 @@ export class BunWebSocketTransport {
     this.clientIds.delete(adapter)
     const hasOtherConnections =
       clientId !== null && Array.from(this.clientIds.values()).includes(clientId)
-    this.options.callbacks.connectionCloseHandler(clientId, adapter, hasOtherConnections)
+    try {
+      adapter.notify('close')
+    } finally {
+      this.options.callbacks.connectionCloseHandler(clientId, adapter, hasOtherConnections)
+    }
+  }
+
+  private handleError(socket: BunServerWebSocket, error: unknown): void {
+    try {
+      this.adapters.get(socket)?.notify('error', error)
+    } finally {
+      try {
+        this.handleClose(socket)
+      } finally {
+        socket.terminate()
+      }
+    }
   }
 
   private findSocket(ws: WebSocket): BunSocketAdapter | null {

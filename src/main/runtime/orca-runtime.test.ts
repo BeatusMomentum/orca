@@ -2085,6 +2085,12 @@ describe('OrcaRuntimeService', () => {
     expect(runtime.getRuntimeId()).toBeTruthy()
   })
 
+  it('uses a supplied stable runtime identity for durable ownership journals', () => {
+    const runtime = new OrcaRuntimeService(null, undefined, { runtimeId: 'profile-runtime-1' })
+
+    expect(runtime.getRuntimeId()).toBe('profile-runtime-1')
+  })
+
   it('reports runtime protocol, capabilities, and mobile aliases on status', () => {
     const runtime = createRuntime()
 
@@ -17509,6 +17515,43 @@ describe('OrcaRuntimeService', () => {
     }
   })
 
+  it('deduplicates a receipted agent prompt and forwards stable provider operation IDs', async () => {
+    vi.useFakeTimers()
+    try {
+      const writes: string[] = []
+      const operationIds: (string | undefined)[] = []
+      const runtime = new OrcaRuntimeService(store)
+      runtime.setPtyController({
+        spawn: vi.fn().mockResolvedValue({ id: 'pty-bg' }),
+        write: (_ptyId, data, retry) => {
+          writes.push(data)
+          operationIds.push(retry?.operationId)
+          acknowledgeAgentPromptSubmit(runtime, 'pty-bg', data)
+          return true
+        },
+        kill: () => true,
+        getForegroundProcess: async () => null
+      })
+      const { handle } = await runtime.createTerminal(`path:${TEST_WORKTREE_PATH}`)
+
+      const first = runtime.sendTerminalAgentPrompt(handle, 'review this', {
+        operationId: 'agent-prompt-op-1'
+      })
+      await vi.runAllTimersAsync()
+      await expect(first).resolves.toMatchObject({ handle, accepted: true })
+      await expect(
+        runtime.sendTerminalAgentPrompt(handle, 'review this', {
+          operationId: 'agent-prompt-op-1'
+        })
+      ).resolves.toMatchObject({ handle, accepted: true })
+
+      expect(writes).toEqual([buildAgentPromptPasteBytes('review this'), '\r'])
+      expect(operationIds).toEqual(['agent-prompt-op-1', 'agent-prompt-op-1:suffix'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it.each(['claude', 'codex'] as const)(
     'waits for %s composer output frames to settle before one submit',
     async (agent) => {
@@ -17871,6 +17914,122 @@ describe('OrcaRuntimeService', () => {
       bytesWritten: Buffer.byteLength(text, 'utf8')
     })
     expect(writes).toEqual(['x'.repeat(TERMINAL_INPUT_CHUNK_MAX_BYTES), 'tail'])
+  })
+
+  it('passes stable terminal.send operation identities to provider writes', async () => {
+    const retries: ({ operationId: string } | undefined)[] = []
+    const runtime = new OrcaRuntimeService(store)
+    runtime.setPtyController({
+      spawn: vi.fn().mockResolvedValue({ id: 'pty-bg' }),
+      write: (_ptyId, _data, retry) => {
+        retries.push(retry)
+        return true
+      },
+      kill: () => true,
+      getForegroundProcess: async () => null
+    })
+    const { handle } = await runtime.createTerminal(`path:${TEST_WORKTREE_PATH}`)
+
+    await expect(
+      runtime.sendTerminal(handle, { text: 'payload' }, { operationId: 'paste-op-1' })
+    ).resolves.toMatchObject({ handle, accepted: true })
+
+    expect(retries).toEqual([{ operationId: 'paste-op-1' }])
+  })
+
+  it('deduplicates a repeated terminal.send operation after an ambiguous reply', async () => {
+    const writes: string[] = []
+    const runtime = new OrcaRuntimeService(store)
+    runtime.setPtyController({
+      spawn: vi.fn().mockResolvedValue({ id: 'pty-bg' }),
+      write: (_ptyId, data) => {
+        writes.push(data)
+        return true
+      },
+      kill: () => true,
+      getForegroundProcess: async () => null
+    })
+    const { handle } = await runtime.createTerminal(`path:${TEST_WORKTREE_PATH}`)
+
+    await expect(
+      runtime.sendTerminal(handle, { text: 'retry-safe' }, { operationId: 'paste-op-retry' })
+    ).resolves.toMatchObject({ handle, accepted: true })
+    await expect(
+      runtime.sendTerminal(handle, { text: 'retry-safe' }, { operationId: 'paste-op-retry' })
+    ).resolves.toMatchObject({ handle, accepted: true })
+
+    expect(writes).toEqual(['retry-safe'])
+  })
+
+  it('deduplicates simultaneous first terminal.send attempts with the same operation ID', async () => {
+    let releaseWrite!: () => void
+    const writeStarted = new Promise<void>((resolve) => {
+      releaseWrite = resolve
+    })
+    let signalWriteStarted!: () => void
+    const writeStartedSignal = new Promise<void>((resolve) => {
+      signalWriteStarted = resolve
+    })
+    const writes: string[] = []
+    const runtime = new OrcaRuntimeService(store)
+    runtime.setPtyController({
+      spawn: vi.fn().mockResolvedValue({ id: 'pty-bg' }),
+      write: (_ptyId, data) => {
+        writes.push(data)
+        return true
+      },
+      kill: () => true,
+      getForegroundProcess: async () => null
+    })
+    const { handle } = await runtime.createTerminal(`path:${TEST_WORKTREE_PATH}`)
+
+    const first = runtime.sendTerminal(
+      handle,
+      { text: 'concurrent' },
+      {
+        operationId: 'paste-op-concurrent',
+        beforeWrite: async () => {
+          signalWriteStarted()
+          await writeStarted
+        }
+      }
+    )
+    await writeStartedSignal
+
+    const second = runtime.sendTerminal(
+      handle,
+      { text: 'concurrent' },
+      { operationId: 'paste-op-concurrent' }
+    )
+    const conflicting = runtime.sendTerminal(
+      handle,
+      { text: 'different' },
+      { operationId: 'paste-op-concurrent' }
+    )
+
+    await expect(conflicting).rejects.toThrow('terminal_send_operation_conflict')
+    expect(writes).toEqual([])
+
+    releaseWrite()
+    await expect(first).resolves.toMatchObject({ handle, accepted: true })
+    await expect(second).resolves.toMatchObject({ handle, accepted: true })
+    expect(writes).toEqual(['concurrent'])
+  })
+
+  it('rejects a reused terminal.send operation ID with different bytes', async () => {
+    const runtime = new OrcaRuntimeService(store)
+    runtime.setPtyController({
+      spawn: vi.fn().mockResolvedValue({ id: 'pty-bg' }),
+      write: vi.fn(() => true),
+      kill: () => true,
+      getForegroundProcess: async () => null
+    })
+    const { handle } = await runtime.createTerminal(`path:${TEST_WORKTREE_PATH}`)
+
+    await runtime.sendTerminal(handle, { text: 'first' }, { operationId: 'paste-op-conflict' })
+    await expect(
+      runtime.sendTerminal(handle, { text: 'different' }, { operationId: 'paste-op-conflict' })
+    ).rejects.toThrow('terminal_send_operation_conflict')
   })
 
   it('yields while validating accepted large terminal.send text before provider writes', async () => {
@@ -30244,6 +30403,44 @@ describe('OrcaRuntimeService', () => {
     expect(closeTerminal).toHaveBeenCalledWith('laptop-tab')
   })
 
+  it('closes a recovered daemon PTY when its session surface is absent', async () => {
+    const kill = vi.fn(() => true)
+    const rendererError = new Error('tab_not_found')
+    const closeTerminal = vi.fn(() => {
+      throw rendererError
+    })
+    const closeTerminalTab = vi.fn(async () => {
+      throw new Error('tab_not_found')
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const runtime = new OrcaRuntimeService(store)
+    runtime.setNotifier({ closeTerminal, closeTerminalTab } as never)
+    runtime.setPtyController({
+      write: () => true,
+      kill,
+      getForegroundProcess: async () => null
+    })
+    runtime.registerPty('recovered-daemon-pty', TEST_WORKTREE_ID, null, {
+      tabId: 'recovered-tab',
+      leafId: HEADLESS_LEAF_ID
+    })
+    runtime.syncWindowGraph(0, { tabs: [], leaves: [] })
+    const [terminal] = (await runtime.listTerminals()).terminals
+
+    await expect(runtime.closeTerminal(terminal.handle)).resolves.toEqual({
+      handle: terminal.handle,
+      tabId: 'recovered-tab',
+      ptyKilled: true
+    })
+    expect(closeTerminalTab).not.toHaveBeenCalled()
+    expect(kill).toHaveBeenCalledWith('recovered-daemon-pty')
+    expect(closeTerminal).toHaveBeenCalledWith('recovered-tab')
+    expect(warn).toHaveBeenCalledWith(
+      '[runtime] failed to notify renderer after headless terminal close',
+      { parentTabId: 'recovered-tab', error: rendererError }
+    )
+  })
+
   it('waits for renderer acknowledgement before returning a whole-tab close receipt', async () => {
     const { runtimeStore } = makeRuntimeStoreWithWorkspaceSession(
       makeWorkspaceSessionWithHeadlessTerminal()
@@ -32310,7 +32507,7 @@ describe('OrcaRuntimeService', () => {
     expect(getSession().terminalLayoutsByTabId['host-tab']).toBeUndefined()
   })
 
-  it('retires an SSH-owned surface when a stale renderer acknowledges close after relay recovery', async () => {
+  it('stops the exact SSH PTY when its surface vanishes during recovered close', async () => {
     const ptyId = 'ssh:ssh-1@@relay-recovered-pty'
     const { runtimeStore, getSession } = makeRuntimeStoreWithWorkspaceSession(
       makeWorkspaceSessionWithHeadlessTerminal({
@@ -32336,7 +32533,9 @@ describe('OrcaRuntimeService', () => {
     const closeTerminal = vi.fn()
     const closeTerminalTab = vi.fn(async () => {})
     let runtime!: OrcaRuntimeService
+    let ptyLive = true
     const kill = vi.fn((closedPtyId: string) => {
+      ptyLive = false
       runtime.onPtyExit(closedPtyId, 0)
       return true
     })
@@ -32346,7 +32545,71 @@ describe('OrcaRuntimeService', () => {
       write: () => true,
       kill,
       getForegroundProcess: async () => null,
-      listProcesses: async () => []
+      listProcesses: async () =>
+        ptyLive ? [{ id: ptyId, cwd: TEST_WORKTREE_PATH, title: 'Recovered SSH' }] : []
+    })
+    runtime.registerPty(ptyId, TEST_WORKTREE_ID, 'ssh-1', {
+      tabId: 'host-tab',
+      leafId: HEADLESS_LEAF_ID
+    })
+    runtime.syncWindowGraph(0, { tabs: [], leaves: [] })
+    const listed = await runtime.listMobileSessionTabs(`id:${TEST_WORKTREE_ID}`)
+    const terminal = listed.tabs.find((tab) => tab.type === 'terminal')
+    if (!terminal || terminal.type !== 'terminal' || !terminal.terminal) {
+      throw new Error('Expected a ready SSH terminal')
+    }
+    const closeMobileSessionTab = vi.spyOn(runtime, 'closeMobileSessionTab')
+
+    await expect(runtime.closeTerminal(terminal.terminal)).resolves.toEqual({
+      handle: terminal.terminal,
+      tabId: 'host-tab',
+      ptyKilled: true
+    })
+
+    expect(closeTerminalTab).not.toHaveBeenCalled()
+    expect(closeMobileSessionTab).toHaveBeenCalledWith(`id:${TEST_WORKTREE_ID}`, 'host-tab', {
+      localPtyTeardownOwnedExternally: true
+    })
+    expect(kill).toHaveBeenCalledTimes(1)
+    expect(kill).toHaveBeenCalledWith(ptyId)
+    expect(closeTerminal).toHaveBeenCalledWith('host-tab')
+    expect(getSession().tabsByWorktree[TEST_WORKTREE_ID]).toEqual([])
+    expect(getSession().terminalLayoutsByTabId['host-tab']).toBeUndefined()
+    expect((await runtime.listMobileSessionTabs(`id:${TEST_WORKTREE_ID}`)).tabs).toEqual([])
+  })
+
+  it('does not re-kill an externally stopped SSH PTY through raw renderer cleanup', async () => {
+    const ptyId = 'ssh:ssh-1@@raw-renderer-cleanup'
+    const { runtimeStore, getSession } = makeRuntimeStoreWithWorkspaceSession(
+      makeWorkspaceSessionWithHeadlessTerminal({
+        tabsByWorktree: {
+          [TEST_WORKTREE_ID]: [
+            {
+              id: 'host-tab',
+              ptyId,
+              worktreeId: TEST_WORKTREE_ID,
+              title: 'Recovered SSH Terminal',
+              customTitle: null,
+              color: null,
+              sortOrder: 0,
+              createdAt: 1
+            }
+          ]
+        },
+        terminalLayoutsByTabId: {
+          'host-tab': makeHeadlessTerminalLayout({ [HEADLESS_LEAF_ID]: ptyId })
+        }
+      })
+    )
+    const kill = vi.fn(() => true)
+    const closeTerminal = vi.fn()
+    const runtime = new OrcaRuntimeService(runtimeStore as never)
+    runtime.setNotifier({ closeTerminal } as never)
+    runtime.setPtyController({
+      write: () => true,
+      kill,
+      getForegroundProcess: async () => null,
+      listProcesses: async () => [{ id: ptyId, cwd: TEST_WORKTREE_PATH, title: 'Recovered SSH' }]
     })
     runtime.registerPty(ptyId, TEST_WORKTREE_ID, 'ssh-1', {
       tabId: 'host-tab',
@@ -32369,13 +32632,6 @@ describe('OrcaRuntimeService', () => {
           leafId: HEADLESS_LEAF_ID,
           paneRuntimeId: 1,
           ptyId
-        },
-        {
-          tabId: 'host-tab',
-          worktreeId: TEST_WORKTREE_ID,
-          leafId: HEADLESS_SECOND_LEAF_ID,
-          paneRuntimeId: 2,
-          ptyId: 'stale-renderer-pty'
         }
       ]
     })
@@ -32391,13 +32647,86 @@ describe('OrcaRuntimeService', () => {
       ptyKilled: true
     })
 
-    expect(closeTerminalTab).toHaveBeenCalledWith('host-tab', {
-      localPtyTeardownOwnedExternally: true
-    })
+    expect(kill).toHaveBeenCalledTimes(1)
+    expect(kill).toHaveBeenCalledWith(ptyId)
     expect(closeTerminal).toHaveBeenCalledWith('host-tab')
     expect(getSession().tabsByWorktree[TEST_WORKTREE_ID]).toEqual([])
     expect(getSession().terminalLayoutsByTabId['host-tab']).toBeUndefined()
-    expect((await runtime.listMobileSessionTabs(`id:${TEST_WORKTREE_ID}`)).tabs).toEqual([])
+  })
+
+  it('preserves renderer ownership when its close transaction reports a missing tab', async () => {
+    const ptyId = `${TEST_WORKTREE_ID}@@renderer-owned`
+    const { runtimeStore, getSession } = makeRuntimeStoreWithWorkspaceSession(
+      makeWorkspaceSessionWithHeadlessTerminal({
+        tabsByWorktree: {
+          [TEST_WORKTREE_ID]: [
+            {
+              id: 'host-tab',
+              ptyId,
+              worktreeId: TEST_WORKTREE_ID,
+              title: 'Renderer-owned Terminal',
+              customTitle: null,
+              color: null,
+              sortOrder: 0,
+              createdAt: 1
+            }
+          ]
+        },
+        terminalLayoutsByTabId: {
+          'host-tab': makeHeadlessTerminalLayout({ [HEADLESS_LEAF_ID]: ptyId })
+        }
+      })
+    )
+    const kill = vi.fn(() => true)
+    const runtime = new OrcaRuntimeService(runtimeStore as never)
+    runtime.setNotifier({ closeTerminal: vi.fn(), closeTerminalTab: vi.fn() } as never)
+    runtime.setPtyController({
+      write: () => true,
+      kill,
+      getForegroundProcess: async () => null,
+      listProcesses: async () => [{ id: ptyId, cwd: TEST_WORKTREE_PATH, title: 'Renderer-owned' }]
+    })
+    runtime.registerPty(ptyId, TEST_WORKTREE_ID, null, {
+      tabId: 'host-tab',
+      leafId: HEADLESS_LEAF_ID
+    })
+    runtime.syncWindowGraph(1, {
+      tabs: [
+        {
+          tabId: 'host-tab',
+          worktreeId: TEST_WORKTREE_ID,
+          title: 'Renderer-owned Terminal',
+          activeLeafId: HEADLESS_LEAF_ID,
+          layout: null
+        }
+      ],
+      leaves: [
+        {
+          tabId: 'host-tab',
+          worktreeId: TEST_WORKTREE_ID,
+          leafId: HEADLESS_LEAF_ID,
+          paneRuntimeId: 1,
+          ptyId
+        }
+      ]
+    })
+    const listed = await runtime.listMobileSessionTabs(`id:${TEST_WORKTREE_ID}`)
+    const terminal = listed.tabs.find((tab) => tab.type === 'terminal')
+    if (!terminal || terminal.type !== 'terminal' || !terminal.terminal) {
+      throw new Error('Expected a ready renderer-owned terminal')
+    }
+    const closeMobileSessionTab = vi
+      .spyOn(runtime, 'closeMobileSessionTab')
+      .mockRejectedValueOnce(new Error('tab_not_found'))
+
+    await expect(runtime.closeTerminal(terminal.terminal)).rejects.toThrow('tab_not_found')
+
+    expect(closeMobileSessionTab).toHaveBeenCalledWith(`id:${TEST_WORKTREE_ID}`, 'host-tab', {
+      localPtyTeardownOwnedExternally: true
+    })
+    expect(kill).not.toHaveBeenCalled()
+    expect(getSession().tabsByWorktree[TEST_WORKTREE_ID]).toHaveLength(1)
+    expect(getSession().terminalLayoutsByTabId['host-tab']).toBeDefined()
   })
 
   it('keeps the renderer close transaction for an adopted runtime-owned tab', async () => {

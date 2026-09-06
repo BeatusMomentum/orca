@@ -1,4 +1,4 @@
-import { createServer, type Server, type Socket } from 'node:net'
+import { createServer, type AddressInfo, type Server, type Socket } from 'node:net'
 import type { ClientChannel } from 'ssh2'
 import type { SshConnection } from './ssh-connection'
 import type {
@@ -50,11 +50,16 @@ export class Ssh2PortForwardProvider implements SshPortForwardProvider {
     })
 
     await listen(server, options.localHost, options.localPort)
+    const address = server.address() as AddressInfo | null
+    if (!address) {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+      throw new Error('SSH port forward listener did not expose its allocated port')
+    }
 
     const entry = {
       id: options.id,
       connectionId: options.connectionId,
-      localPort: options.localPort,
+      localPort: address.port,
       remoteHost: options.remoteHost,
       remotePort: options.remotePort,
       label: options.label

@@ -4,7 +4,11 @@ import { connectIpcPty } from './ipc-pty-connect'
 import { createIpcPtySessionHandlers } from './ipc-pty-session-handlers'
 import { createPtyInputWriteQueue } from './pty-input-write-queue'
 import { createPtyOutputProcessor } from './pty-output-processor'
-import type { IpcPtyTransportOptions, PtyTransport } from './pty-transport-types'
+import type {
+  IpcPtyTransportOptions,
+  PtyInputOperationOptions,
+  PtyTransport
+} from './pty-transport-types'
 
 export {
   ensurePtyDispatcher,
@@ -51,7 +55,8 @@ export function createIpcPtyTransport(opts: IpcPtyTransportOptions = {}): PtyTra
 
   const inputWriteQueue = createPtyInputWriteQueue({
     isWritable: (id) => connected && ptyId === id,
-    write: (id, data) => window.api.pty.write(id, data),
+    write: (id, data, options) =>
+      options ? window.api.pty.write(id, data, options) : window.api.pty.write(id, data),
     onDrainFailure: (id) => {
       if (ptyId === id) {
         storedCallbacks.onWriteUnavailable?.()
@@ -143,18 +148,21 @@ export function createIpcPtyTransport(opts: IpcPtyTransportOptions = {}): PtyTra
       storedCallbacks = {}
     },
 
-    sendInput(data) {
-      return connected && ptyId ? inputWriteQueue.enqueue(ptyId, data) : false
+    sendInput(data, options) {
+      return connected && ptyId ? inputWriteQueue.enqueue(ptyId, data, options) : false
     },
 
-    sendInputImmediate(data) {
-      return connected && ptyId ? inputWriteQueue.enqueueQueryReply(ptyId, data) : false
+    sendInputImmediate(data, options) {
+      return connected && ptyId ? inputWriteQueue.enqueueQueryReply(ptyId, data, options) : false
     },
 
     ...(connectionId
       ? {}
       : {
-          async sendInputAccepted(data: string): Promise<boolean> {
+          async sendInputAccepted(
+            data: string,
+            options?: PtyInputOperationOptions
+          ): Promise<boolean> {
             if (!connected || !ptyId) {
               return false
             }
@@ -163,9 +171,20 @@ export function createIpcPtyTransport(opts: IpcPtyTransportOptions = {}): PtyTra
             if (!connected || ptyId !== id) {
               return false
             }
-            return writeAcceptedIpcPtyInput(id, data, () => connected && ptyId === id)
+            return writeAcceptedIpcPtyInput(id, data, () => connected && ptyId === id, options)
           }
         }),
+
+    ...(connectionId
+      ? {
+          async retireInputOperation(operationId: string): Promise<boolean> {
+            if (!connected || !ptyId) {
+              return false
+            }
+            return window.api.pty.retireWriteOperation?.(ptyId, operationId) ?? false
+          }
+        }
+      : {}),
 
     claimViewport(cols, rows) {
       if (!connected || !ptyId) {

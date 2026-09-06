@@ -8,6 +8,7 @@ import {
   requireRangeMatchesSpan,
   SshPtyOwnershipTransferPendingSettlements
 } from './ssh-pty-ownership-transfer-pending-settlements'
+import { SshPtyClosedGenerationRanges } from './ssh-pty-closed-generation-ranges'
 
 export type SshPtyOwnershipTransferSourceRange = Readonly<{
   providerGeneration: number
@@ -25,6 +26,7 @@ export type SshPtyOwnershipTransferSourceRange = Readonly<{
 /** Owns destination receipts that race source-span admission. */
 export class SshPtyOwnershipTransferObligations {
   private readonly pending = new SshPtyOwnershipTransferPendingSettlements()
+  private readonly closedGenerations = new SshPtyClosedGenerationRanges()
 
   constructor(
     private readonly coordinator: SshPtySourceObligationCoordinator,
@@ -52,7 +54,7 @@ export class SshPtyOwnershipTransferObligations {
   }
 
   settle(range: SshPtyOwnershipTransferSourceRange): void {
-    if (!this.enabled) {
+    if (!this.enabled || this.closedGenerations.has(range.providerGeneration)) {
       return
     }
     if (!this.coordinator.hasRetainedSpan(range.spanId)) {
@@ -65,6 +67,7 @@ export class SshPtyOwnershipTransferObligations {
   }
 
   closeGeneration(providerGeneration: number): void {
+    this.closedGenerations.add(providerGeneration)
     this.pending.closeGeneration(providerGeneration)
   }
 

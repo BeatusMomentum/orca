@@ -15,8 +15,10 @@ import {
   disconnectDaemon,
   daemonOwnsFreshPersistentPtys,
   initDaemonPtyProvider,
-  readDaemonPidRecord
+  readDaemonPidRecord,
+  requestIdleDaemonRetirement
 } from '../daemon/daemon-init'
+import type { OrcadDecommissionResult } from '../../shared/orcad-decommission'
 
 export type OrcadDaemonStartup =
   | { state: 'live'; pid: number | null }
@@ -64,4 +66,35 @@ export async function startOrcadDaemon(): Promise<OrcadDaemonStartup> {
  */
 export async function stopOrcadDaemon(): Promise<void> {
   await disconnectDaemon()
+}
+
+/** Fence all future terminal admission before allowing a managed runtime to stop. */
+export async function decommissionOrcadDaemonIfIdle(): Promise<OrcadDecommissionResult> {
+  const result = await requestIdleDaemonRetirement()
+  if (result.state === 'retiring') {
+    return { outcome: 'accepted' }
+  }
+  if (result.state === 'busy' && result.liveSessions !== null && result.liveSessions > 0) {
+    return {
+      outcome: 'refused',
+      verdict: 'live',
+      code: 'orcad_decommission_live_sessions',
+      reason:
+        `${result.liveSessions} terminal ` +
+        `${result.liveSessions === 1 ? 'session is' : 'sessions are'} still live. ` +
+        'Close the sessions before stopping and unlinking this server.'
+    }
+  }
+  return {
+    outcome: 'refused',
+    verdict: 'unverifiable',
+    code:
+      result.state === 'unsupported'
+        ? 'orcad_decommission_daemon_incompatible'
+        : 'orcad_decommission_unverifiable',
+    reason:
+      result.state === 'unsupported'
+        ? 'The terminal daemon is from an older generation that cannot be atomically decommissioned.'
+        : 'The host could not atomically prove that terminal admission is fenced and no sessions are live.'
+  }
 }

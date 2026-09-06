@@ -112,6 +112,17 @@ describe('SshPtyOutputIntake ownership-transfer settlement ordering', () => {
     vi.useRealTimers()
   })
 
+  it('drops a destination receipt that arrives after its generation closed', () => {
+    const harness = createHarness({}, { ownershipTransferOutputEnabled: true })
+
+    harness.intake.closeGeneration(1, 'reconnect')
+    harness.intake.settleOwnershipTransferOutput(sourceRange(1))
+
+    expect(harness.intake.getDebugSnapshot().source).toMatchObject({
+      pendingOwnershipTransferSettlements: 0
+    })
+  })
+
   it('treats duplicate durable receipts as idempotent before and after admission', async () => {
     const harness = createHarness({}, { ownershipTransferOutputEnabled: true })
     const receipt = sourceRange(1)

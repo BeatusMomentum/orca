@@ -12,6 +12,7 @@
  * Chromium proves available at startup.
  */
 import process from 'node:process'
+import { join } from 'node:path'
 import { setAppEnvironment, type AppEnvironment } from '../../shared/app-environment'
 import { setSecretStore, type SecretStore } from '../../shared/secret-store'
 import type { ServeReadiness } from '../server/serve-readiness'
@@ -28,6 +29,9 @@ import {
   OrcadInstanceLockError,
   type OrcadInstanceLock
 } from './orcad-instance-lock'
+import { installOrcadStopRequestListener } from './orcad-stop-request-listener'
+import { loadOrCreateRuntimeIdentity } from '../runtime/runtime-identity'
+import { isPtyOwnershipTransferMutationEnabled } from '../../shared/pty-ownership-transfer-release-gate'
 
 let runOrcadQuitHandlers = (): void => {}
 
@@ -134,8 +138,12 @@ async function startOrcadRuntime(
 ): Promise<OrcadHandle> {
   const { OrcaRuntimeService } = await import('../runtime/orca-runtime')
   const { OrcaRuntimeRpcServer } = await import('../runtime/runtime-rpc')
-  const { registerHeadlessPtyRuntime, getLocalPtyProvider, getSshPtyProvider } =
-    await import('../ipc/pty')
+  const {
+    registerHeadlessPtyRuntime,
+    getLocalPtyProvider,
+    getSshPtyProvider,
+    subscribeLocalPtyProviderChanges
+  } = await import('../ipc/pty')
   const { getAppEnvironment } = await import('../../shared/app-environment')
   const { resolveAdvertisedPairingEndpoint } = await import('../runtime/pairing-endpoint')
   const { ServeReadinessPublisher } = await import('../server/serve-readiness')
@@ -146,6 +154,12 @@ async function startOrcadRuntime(
   const { startOrcadDaemon, stopOrcadDaemon } = await import('./orcad-daemon-supervision')
   const { daemonOwnsFreshPersistentPtys } = await import('../daemon/daemon-init')
   const { collectOrcadHealth } = await import('./orcad-health')
+  const { configureOrcadDecommission } = await import('./orcad-decommission')
+  const { decommissionOrcadDaemonIfIdle } = await import('./orcad-daemon-supervision')
+  const {
+    RuntimePtyOwnershipTransferReadOnlySource,
+    createReconciledRuntimePtyOwnershipTransferReadOnlySource
+  } = await import('../providers/runtime-pty-ownership-transfer-read-only-source')
 
   const runtimeUserDataPath = getAppEnvironment().getPath('userData')
   initOrcaProfilePaths()
@@ -165,10 +179,41 @@ async function startOrcadRuntime(
   // registerPtyHandlers so the IPC layer routes through the daemon from the first call.
   await startOrcadDaemon()
 
+  const runtimeId = loadOrCreateRuntimeIdentity(join(profile.profileDirectory, 'runtime-identity.json'))
+  let localPtyOwnershipTransferReadOnlySource: InstanceType<
+    typeof RuntimePtyOwnershipTransferReadOnlySource
+  > | null = null
+  let unsubscribeLocalPtyOwnershipProviderChanges = (): void => {}
+  try {
+    const binding = await createReconciledRuntimePtyOwnershipTransferReadOnlySource({
+      stateDirectory: join(profile.profileDirectory, 'pty-ownership-transfer-source'),
+      runtimeId,
+      onError: (error) => console.error('[orcad] local PTY provider reconciliation failed:', error),
+      mutationEnabled: () => isPtyOwnershipTransferMutationEnabled(),
+      authorizeMutationRequest: (method, request, authBinding) =>
+        localPtyOwnershipTransferReadOnlySource?.authorizeMutationRequest(
+          method,
+          request,
+          authBinding
+        ) ?? false,
+      getProvider: getLocalPtyProvider,
+      subscribe: subscribeLocalPtyProviderChanges
+    })
+    localPtyOwnershipTransferReadOnlySource = binding.source
+    unsubscribeLocalPtyOwnershipProviderChanges = binding.unsubscribe
+  } catch (error) {
+    console.error('[orcad] local PTY ownership source state is unavailable:', error)
+  }
+
   const runtime = new OrcaRuntimeService(store, undefined, {
+    runtimeId,
     // Why lazy: a daemon swap replaces the provider after construction, so an eager
     // reference would freeze the pre-daemon one.
     getLocalProvider: () => getLocalPtyProvider(),
+    getLocalPtyOwnershipTransferReadOnlySource: () => localPtyOwnershipTransferReadOnlySource,
+    getLocalPtyOwnershipTransferSource: () =>
+      localPtyOwnershipTransferReadOnlySource?.getMutationSource() ?? null,
+    ptyOwnershipTransferMutationEnabled: () => isPtyOwnershipTransferMutationEnabled(),
     // Why: destructive worktree removal refuses to run without a provider to stop
     // processes through — correctly, since it cannot otherwise verify the tree is idle.
     getSshProvider: (connectionId) => getSshPtyProvider(connectionId),
@@ -182,6 +227,8 @@ async function startOrcadRuntime(
     // constructor's default would advertise it.
     getDesktopWindowStatus: () => 'blocked'
   })
+  // Install the durable destination sink before the headless RPC endpoint accepts SSH clients.
+  runtime.installPtyOwnershipTransferDestinationOutputBridge()
 
   // Why the headless entry point rather than registerPtyHandlers directly: this is the
   // same call `--serve` makes, and it threads the store through. Without the store the
@@ -196,6 +243,7 @@ async function startOrcadRuntime(
   // restored orchestration rows claiming an authority this host never took over.
   // Why before the RPC server binds: a client host attaching first would find no pages to recover.
   runtime.rehydrateClientHostedBrowserPages()
+  runtime.recoverPtyOwnershipTransferDestinations()
 
   await runtime.refreshRestoredOrchestrationAuthority()
   await runtime.reconcileLegacyWorkerTerminals()
@@ -210,7 +258,9 @@ async function startOrcadRuntime(
     // once a device has connected, so a loopback deployment would silently go wide one
     // restart after its first client paired.
     pinnedBindHost: bindHost,
-    ...(options.port !== undefined ? { wsPort: options.port, preferPinnedWsPort: true } : {})
+    ...(options.port !== undefined
+      ? { wsPort: options.port, preferPinnedWsPort: true, requirePinnedWsPort: true }
+      : {})
   })
   await rpc.start()
   console.error(`[orcad] ${describeOrcadBindExposure(bindHost)}`)
@@ -258,13 +308,17 @@ async function startOrcadRuntime(
   await new ServeReadinessPublisher().publish(readiness, {
     mode: options.json ? 'json' : 'human'
   })
+  configureOrcadDecommission(decommissionOrcadDaemonIfIdle)
 
   return {
     readiness,
     stop: async () => {
+      configureOrcadDecommission(null)
       try {
         await rpc.stop()
       } finally {
+        unsubscribeLocalPtyOwnershipProviderChanges()
+        localPtyOwnershipTransferReadOnlySource?.dispose()
         // Why disconnect and not shut down: the daemon must outlive this process, or an
         // orcad restart goes back to killing every running terminal. See
         // orcad-daemon-supervision.ts.
@@ -339,7 +393,8 @@ export function resolveOrcadExitCode(error: unknown): number {
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   const handle = await startOrcad(parseArgs(argv))
   let stopping = false
-  const shutdown = (signal: NodeJS.Signals): void => {
+  let stopRequestListener: ReturnType<typeof installOrcadStopRequestListener> | null = null
+  const shutdown = (signal: NodeJS.Signals | 'ORCAD_STOP_REQUEST'): void => {
     if (stopping) {
       // Why escalate rather than ignore: a supervisor's second signal means the first
       // deadline elapsed. Continuing to wait silently is what makes a stop hang until
@@ -348,6 +403,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       process.exit(ORCAD_EXIT_FAILED)
     }
     stopping = true
+    stopRequestListener?.close()
     // Why a self-imposed deadline as well: the supervisor's SIGKILL leaves no exit code and
     // no log line. Exiting ourselves keeps the failure attributable.
     const deadline = setTimeout(() => {
@@ -369,4 +425,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   }
   process.on('SIGINT', () => shutdown('SIGINT'))
   process.on('SIGTERM', () => shutdown('SIGTERM'))
+  stopRequestListener = installOrcadStopRequestListener(() => shutdown('ORCAD_STOP_REQUEST'), {
+    installRoot: resolveOrcadInstallRoot()
+  })
 }

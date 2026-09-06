@@ -5,6 +5,7 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import type { RpcTransport } from './transport'
 import { createStaticWebClientHandler } from './static-web-client-handler'
 import { canUseBunWebSocketTransport, BunWebSocketTransport } from './bun-websocket-transport'
+import { BunWebSocketUpgradeProxy } from './bun-websocket-upgrade-proxy'
 import {
   attachNodeWebSocketLifecycle,
   rejectNodeWebSocketOverCapacity,
@@ -12,10 +13,12 @@ import {
   type WebSocketMessageHandler
 } from './node-websocket-lifecycle'
 import { RemoteRuntimeServerHeartbeat } from './remote-runtime-server-heartbeat'
+import {
+  WEBSOCKET_TRANSPORT_MAX_CONNECTIONS,
+  WEBSOCKET_TRANSPORT_MAX_MESSAGE_BYTES,
+  WEBSOCKET_TRANSPORT_MAX_TCP_CONNECTIONS
+} from './websocket-transport-limits'
 
-const MAX_WS_MESSAGE_BYTES = 1024 * 1024
-const MAX_WS_CONNECTIONS = 128
-const MAX_TCP_CONNECTIONS = MAX_WS_CONNECTIONS * 2
 const PRE_AUTH_TIMEOUT_MS = 10_000
 
 // Why: mobile clients background-suspend sockets with no TCP FIN, leaving half-opens that otherwise only the OS keepalive (~2h) reaps; a 15s ping/pong sweep bounds that to ~60s (clients auto-pong per RFC 6455), since a reap needs consecutive unanswered probes rather than one (STA-3320).
@@ -38,6 +41,8 @@ export type WebSocketTransportOptions = {
   fallbackPort?: number
   // Why: serve --port clients dial the pinned port; prefer it first so a stale fallback can't steal the pin (issue #8535). Default keeps fallback-first (STA-1511).
   preferPinnedPort?: boolean
+  // Why: managed SSH tunnels dial one configured remote port and cannot follow a fallback.
+  strictPort?: boolean
 }
 
 export class WebSocketTransport implements RpcTransport {
@@ -50,9 +55,11 @@ export class WebSocketTransport implements RpcTransport {
   private readonly staticRoot: string | undefined
   private readonly fallbackPort: number | undefined
   private readonly preferPinnedPort: boolean
+  private readonly strictPort: boolean
   private httpServer: HttpsServer | HttpServer | null = null
   private wss: WebSocketServer | null = null
   private bunTransport: BunWebSocketTransport | null = null
+  private bunUpgradeProxy: BunWebSocketUpgradeProxy | null = null
   private messageHandler: WebSocketMessageHandler | null = null
   private connectionCloseHandler:
     | ((clientId: string | null, ws: WebSocket, hasOtherConnections: boolean) => void)
@@ -72,7 +79,8 @@ export class WebSocketTransport implements RpcTransport {
     preAuthTimeoutMs,
     staticRoot,
     fallbackPort,
-    preferPinnedPort
+    preferPinnedPort,
+    strictPort
   }: WebSocketTransportOptions) {
     this.host = host
     this.port = port
@@ -81,12 +89,13 @@ export class WebSocketTransport implements RpcTransport {
     this.heartbeat = new RemoteRuntimeServerHeartbeat(
       heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS,
       heartbeatNow,
-      MAX_WS_CONNECTIONS
+      WEBSOCKET_TRANSPORT_MAX_CONNECTIONS
     )
     this.preAuthTimeoutMs = preAuthTimeoutMs ?? PRE_AUTH_TIMEOUT_MS
     this.staticRoot = staticRoot
     this.fallbackPort = fallbackPort
     this.preferPinnedPort = preferPinnedPort === true
+    this.strictPort = strictPort === true
   }
 
   onMessage(handler: WebSocketMessageHandler): void {
@@ -123,30 +132,36 @@ export class WebSocketTransport implements RpcTransport {
   }
 
   get resolvedPort(): number {
-    if (this.bunTransport) {
-      return this.bunTransport.resolvedPort
-    }
     const addr = this.httpServer?.address()
     return addr && typeof addr === 'object' ? addr.port : this.port
   }
 
   get resolvedHost(): string | null {
-    if (this.bunTransport) {
-      return this.bunTransport.resolvedHost
-    }
     const addr = this.httpServer?.address()
     return addr && typeof addr === 'object' ? addr.address : null
   }
 
   async start(): Promise<void> {
     if (canUseBunWebSocketTransport()) {
-      this.startBun()
+      if (!this.bunTransport) {
+        await this.startBun()
+      }
       return
     }
     if (this.wss) {
       return
     }
 
+    await this.startWithPortFallback((port) => this.tryListen(port))
+  }
+
+  private async startWithPortFallback(
+    tryListen: (port: number) => void | Promise<void>
+  ): Promise<void> {
+    if (this.strictPort) {
+      await tryListen(this.port)
+      return
+    }
     // Why: bind a persisted fallback first so devices paired to it aren't stranded (STA-1511); serve --port flips to pinned-first (issue #8535); on failure each candidate falls through to OS-assigned port 0.
     const persistedFallbackPort =
       this.fallbackPort !== undefined && this.fallbackPort !== 0 && this.fallbackPort !== this.port
@@ -160,7 +175,7 @@ export class WebSocketTransport implements RpcTransport {
           : [persistedFallbackPort, this.port]
     for (const port of candidatePorts) {
       try {
-        await this.tryListen(port)
+        await tryListen(port)
         return
       } catch (error) {
         // Why: a persisted fallback may fail for any reason, while configured ports fall through only when their listen is occupied or denied.
@@ -176,32 +191,26 @@ export class WebSocketTransport implements RpcTransport {
       }
     }
     console.warn('[ws-transport] All configured ports failed to bind, using an OS-assigned port')
-    await this.tryListen(0)
+    await tryListen(0)
   }
 
-  private startBun(): void {
+  private async startBun(): Promise<void> {
     const messageHandler = this.messageHandler
     const connectionCloseHandler = this.connectionCloseHandler
     if (!messageHandler || !connectionCloseHandler) {
       throw new Error('Bun WebSocket transport requires message and close handlers')
     }
-    this.bunTransport = new BunWebSocketTransport({
-      host: this.host,
-      port: this.port,
-      staticRoot: this.staticRoot,
-      tlsCert: this.tlsCert,
-      tlsKey: this.tlsKey,
+    const transport = new BunWebSocketTransport({
       preAuthTimeoutMs: this.preAuthTimeoutMs,
       heartbeat: this.heartbeat,
-      callbacks: {
-        messageHandler,
-        connectionCloseHandler
-      }
+      callbacks: { messageHandler, connectionCloseHandler }
     })
+    transport.start()
     try {
-      this.bunTransport.start()
+      await this.startWithPortFallback((port) => this.tryListenBun(port, transport.port))
+      this.bunTransport = transport
     } catch (error) {
-      this.bunTransport = null
+      await transport.stop()
       throw error
     }
   }
@@ -215,28 +224,30 @@ export class WebSocketTransport implements RpcTransport {
       : createHttpServer(requestListener)
   }
 
+  private async tryListenBun(port: number, targetPort: number): Promise<void> {
+    const httpServer = this.createHttpServer()
+    const proxy = new BunWebSocketUpgradeProxy(targetPort)
+    httpServer.on('upgrade', (request, socket, head) => proxy.handle(request, socket, head))
+    httpServer.maxConnections = WEBSOCKET_TRANSPORT_MAX_TCP_CONNECTIONS
+    await this.listen(httpServer, port)
+    this.httpServer = httpServer
+    this.bunUpgradeProxy = proxy
+  }
+
   // Why: attach the WSS only after listen succeeds; earlier it re-emits httpServer's EADDRINUSE as an uncatchable exception and breaks the fallback.
   private async tryListen(port: number): Promise<void> {
     const httpServer = this.createHttpServer()
-
-    await new Promise<void>((resolve, reject) => {
-      httpServer.once('error', reject)
-      httpServer.listen(port, this.host, () => {
-        httpServer.off('error', reject)
-        resolve()
-      })
-    })
-
     // Why: the WS cap applies only post-upgrade; a separate TCP cap bounds raw/pre-upgrade descriptor use.
-    httpServer.maxConnections = MAX_TCP_CONNECTIONS
+    httpServer.maxConnections = WEBSOCKET_TRANSPORT_MAX_TCP_CONNECTIONS
+    await this.listen(httpServer, port)
 
     const wss = new WebSocketServer({
       server: httpServer,
-      maxPayload: MAX_WS_MESSAGE_BYTES
+      maxPayload: WEBSOCKET_TRANSPORT_MAX_MESSAGE_BYTES
     })
 
     wss.on('connection', (ws) => {
-      if (wss.clients.size > MAX_WS_CONNECTIONS) {
+      if (wss.clients.size > WEBSOCKET_TRANSPORT_MAX_CONNECTIONS) {
         this.rejectOverCapacity(ws)
         return
       }
@@ -247,27 +258,48 @@ export class WebSocketTransport implements RpcTransport {
     this.wss = wss
   }
 
+  private async listen(httpServer: HttpServer | HttpsServer, port: number): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      httpServer.once('error', reject)
+      httpServer.listen(port, this.host, () => {
+        httpServer.off('error', reject)
+        resolve()
+      })
+    })
+  }
+
   private rejectOverCapacity(ws: WebSocket): void {
     rejectNodeWebSocketOverCapacity(ws)
   }
 
   async stop(): Promise<void> {
     const bunTransport = this.bunTransport
+    const bunUpgradeProxy = this.bunUpgradeProxy
     this.bunTransport = null
-    if (bunTransport) {
-      await bunTransport.stop()
-      return
-    }
+    this.bunUpgradeProxy = null
     const wss = this.wss
     const httpServer = this.httpServer
     this.wss = null
     this.httpServer = null
-    await stopNodeWebSocketTransport({
-      wss,
-      httpServer,
-      heartbeat: this.heartbeat,
-      heartbeatConnections: this.heartbeatConnections
-    })
+    bunUpgradeProxy?.stop()
+    const stops = [
+      stopNodeWebSocketTransport({
+        wss,
+        httpServer,
+        heartbeat: this.heartbeat,
+        heartbeatConnections: this.heartbeatConnections
+      })
+    ]
+    if (bunTransport) {
+      stops.push(bunTransport.stop())
+    }
+    const results = await Promise.allSettled(stops)
+    const errors = results.flatMap((result) =>
+      result.status === 'rejected' ? [result.reason] : []
+    )
+    if (errors.length > 0) {
+      throw new AggregateError(errors, 'WebSocket transport shutdown failed')
+    }
   }
 
   private handleConnection(ws: WebSocket): void {
@@ -296,7 +328,6 @@ function isPortListenFallbackError(error: unknown, port: number): boolean {
     error.code === 'EACCES' &&
     'syscall' in error &&
     error.syscall === 'listen' &&
-    'port' in error &&
-    error.port === port
+    (!('port' in error) || error.port === port)
   )
 }

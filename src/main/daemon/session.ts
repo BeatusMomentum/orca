@@ -29,6 +29,7 @@ export class Session {
   readonly terminalHandle: string | null
   readonly launchAgent: TuiAgent | null
   readonly wslDistro: string | null
+  readonly createdAt: number
   private _state: SessionState = 'running'
   private _exitCode: number | null = null
   private _disposed = false
@@ -46,6 +47,7 @@ export class Session {
     this.terminalHandle = opts.terminalHandle ?? null
     this.launchAgent = opts.launchAgent ?? null
     this.wslDistro = opts.wslDistro ?? null
+    this.createdAt = opts.createdAt ?? Date.now()
     this.subprocess = opts.subprocess
     this.onSessionExit = opts.onExit
     const pipeline = createSessionOutputPipeline({
@@ -55,7 +57,8 @@ export class Session {
       wslDistro: opts.wslDistro,
       historySeedChunks: opts.historySeedChunks,
       subprocess: this.subprocess,
-      isAlive: () => !this._disposed && this._state !== 'exited'
+      isAlive: () => !this._disposed && this._state !== 'exited',
+      incarnationId: this.incarnationId
     })
     this.output = pipeline.output
     this.recoveryBarrier = pipeline.recoveryBarrier

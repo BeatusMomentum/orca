@@ -111,13 +111,15 @@ export async function stopNodeWebSocketTransport(args: {
   }
   if (args.httpServer) {
     await new Promise<void>((resolve, reject) => {
-      args.httpServer?.close((error) => {
+      const server = args.httpServer
+      server?.close((error) => {
         if (error) {
           reject(error)
           return
         }
         resolve()
       })
+      server?.closeAllConnections()
     })
   }
 }

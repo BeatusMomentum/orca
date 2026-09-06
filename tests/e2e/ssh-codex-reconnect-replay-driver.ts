@@ -1,8 +1,8 @@
-import { execFileSync } from 'node:child_process'
 import type { Page } from '@stablyai/playwright-test'
 import { expect } from './helpers/orca-app'
 import {
   DOCKER_SSH_RELAY_REMOTE_REPO_PATH,
+  killDockerSshRelayTargetTransports,
   type DockerSshRelayTarget
 } from './helpers/docker-ssh-relay-target'
 
@@ -12,17 +12,7 @@ export type ConnectedDockerRemote = {
 }
 
 export function dropDockerSshClientSessions(target: DockerSshRelayTarget): void {
-  execFileSync(
-    'docker',
-    [
-      'exec',
-      target.containerName,
-      'bash',
-      '-lc',
-      `ps -eo pid=,comm=,args= | awk '$2 == "sshd" && index($0, "sshd: root") { print $1 }' | xargs -r kill -9`
-    ],
-    { stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 }
-  )
+  killDockerSshRelayTargetTransports(target)
 }
 
 export async function connectDockerRemote(

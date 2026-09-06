@@ -2,6 +2,7 @@ import { appendFileSync } from 'node:fs'
 import type { SshConnection } from '../ssh/ssh-connection'
 import { SshRelaySession } from '../ssh/ssh-relay-session'
 import type { SshConnectionState, SshConnectionStatus } from '../../shared/ssh-types'
+import { getManagedOrcadOwnerEnvironmentId } from '../../shared/managed-orcad-ssh-owner'
 import { createCancelledConnectAttemptError } from '../ssh/ssh-connect-attempt-cancellation'
 import { isAuthError } from '../ssh/ssh-connection-utils'
 import {
@@ -101,6 +102,9 @@ async function doConnect(
   const target = getSshTargetRegistryStore()!.getTarget(targetId)
   if (!target) {
     throw new Error(`SSH target "${targetId}" not found`)
+  }
+  if (getManagedOrcadOwnerEnvironmentId(target.owner) !== null) {
+    throw new Error('This SSH target is reserved for its managed Orca server.')
   }
 
   const existingSession = activeSessions.get(targetId)

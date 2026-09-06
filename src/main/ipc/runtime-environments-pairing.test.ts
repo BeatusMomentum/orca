@@ -137,6 +137,14 @@ describe('registerRuntimeEnvironmentHandlers', () => {
       'runtimeEnvironments:retryConnectionsNow',
       'runtimeEnvironments:getStatus',
       'runtimeEnvironments:call',
+      'runtimeEnvironments:listPendingOrcadMigrations',
+      'runtimeEnvironments:preflightOrcadTarget',
+      'runtimeEnvironments:deployOrcad',
+      'runtimeEnvironments:updateOrcad',
+      'runtimeEnvironments:getOrcadStatus',
+      'runtimeEnvironments:rollbackOrcad',
+      'runtimeEnvironments:recoverOrcad',
+      'runtimeEnvironments:stopOrcad',
       'runtimeEnvironments:subscribe',
       'runtimeEnvironments:unsubscribe'
     ])
@@ -161,6 +169,14 @@ describe('registerRuntimeEnvironmentHandlers', () => {
       'runtimeEnvironments:call',
       'runtimeEnvironments:subscribe',
       'runtimeEnvironments:unsubscribe',
+      'runtimeEnvironments:listPendingOrcadMigrations',
+      'runtimeEnvironments:preflightOrcadTarget',
+      'runtimeEnvironments:deployOrcad',
+      'runtimeEnvironments:updateOrcad',
+      'runtimeEnvironments:getOrcadStatus',
+      'runtimeEnvironments:rollbackOrcad',
+      'runtimeEnvironments:recoverOrcad',
+      'runtimeEnvironments:stopOrcad',
       'runtimeEnvironments:retryConnectionsNow'
     ])
     expect(removeAllListenersMock).toHaveBeenCalledWith('runtimeEnvironments:subscriptionBinary')

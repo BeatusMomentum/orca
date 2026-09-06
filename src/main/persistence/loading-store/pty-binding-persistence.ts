@@ -5,6 +5,7 @@ import {
   cloneLayoutNode,
   layoutContainsLeafId
 } from '../restoring-sessions/terminal-layout-normalization'
+import { inspectPtyOwnershipTransferBindingAdmission } from './pty-ownership-transfer-binding-admission'
 import {
   cloneWorkspaceSessionState,
   createMinimalPersistedTerminalTab
@@ -46,6 +47,10 @@ export class PtyBindingPersistenceOperations {
       expectedSourceBinding?: PtyBindingSourceExpectation
       /** Set by host-initiated creates, which have no renderer session writer behind them. */
       hostAdmittedMembership?: boolean
+      /** Fail-closed publication for an exact, durable ownership-transfer surface. */
+      bindingMode?: 'strict-transfer-publication'
+      /** Exact prewritten baseline artifact committed with a strict transfer binding. */
+      scrollbackSnapshotRef?: string
     },
     hostId?: string | null
   ): boolean {
@@ -54,6 +59,37 @@ export class PtyBindingPersistenceOperations {
       this[ptyBindingPersistenceOperationsContext].sessions.getWorkspaceSession(resolvedHostId)
     const paneKey = `${args.tabId}:${args.leafId}`
     const bindingWorktreeId = args.expectedSourceBinding?.worktreeId ?? args.worktreeId
+    const strictTransferPublication = args.bindingMode === 'strict-transfer-publication'
+    if (strictTransferPublication) {
+      if (
+        args.expectedBinding ||
+        args.expectedSourceBinding ||
+        (args.scrollbackSnapshotRef !== undefined &&
+          !/^v1-[0-9a-f]{32}$/.test(args.scrollbackSnapshotRef))
+      ) {
+        return false
+      }
+      const admission = inspectPtyOwnershipTransferBindingAdmission(session, args)
+      if (admission === 'conflict') {
+        return false
+      }
+      if (admission === 'published') {
+        const layout = session.terminalLayoutsByTabId[args.tabId]
+        const currentRef = layout?.scrollbackRefsByLeafId?.[args.leafId]
+        const hasInlineBuffer = Object.hasOwn(layout?.buffersByLeafId ?? {}, args.leafId)
+        if (args.scrollbackSnapshotRef === undefined) {
+          this[ptyBindingPersistenceOperationsContext].runtime.flushOrThrow()
+          return true
+        }
+        if (currentRef === args.scrollbackSnapshotRef && !hasInlineBuffer) {
+          this[ptyBindingPersistenceOperationsContext].runtime.flushOrThrow()
+          return true
+        }
+        if (currentRef !== undefined || hasInlineBuffer) {
+          return false
+        }
+      }
+    }
     if (args.expectedSourceBinding) {
       const expected = args.expectedSourceBinding
       if (expected.tabId !== args.tabId) {
@@ -148,7 +184,7 @@ export class PtyBindingPersistenceOperations {
       tab.ptyId = args.ptyId
     } else {
       terminalMembershipChanged = true
-      hostAdmittedTabCreated = args.hostAdmittedMembership === true
+      hostAdmittedTabCreated = args.hostAdmittedMembership === true || strictTransferPublication
       // Why: pty:spawn can beat the debounced writer; persist a minimal tab so hydration won't prune the binding as orphaned.
       const nextTabs = [
         ...(tabs ?? []),
@@ -206,6 +242,12 @@ export class PtyBindingPersistenceOperations {
         ...layout.ptyIdsByLeafId,
         [args.leafId]: args.ptyId
       }
+      if (args.scrollbackSnapshotRef) {
+        layout.scrollbackRefsByLeafId = {
+          ...layout.scrollbackRefsByLeafId,
+          [args.leafId]: args.scrollbackSnapshotRef
+        }
+      }
     } else {
       terminalMembershipChanged = true
       // Why: first tab spawn — persist a minimal layout so a SIGKILL before the renderer snapshot can't lose ptyIdsByLeafId.
@@ -215,7 +257,10 @@ export class PtyBindingPersistenceOperations {
           root: { type: 'leaf', leafId: args.leafId },
           activeLeafId: args.leafId,
           expandedLeafId: null,
-          ptyIdsByLeafId: { [args.leafId]: args.ptyId }
+          ptyIdsByLeafId: { [args.leafId]: args.ptyId },
+          ...(args.scrollbackSnapshotRef
+            ? { scrollbackRefsByLeafId: { [args.leafId]: args.scrollbackSnapshotRef } }
+            : {})
         }
       }
     }

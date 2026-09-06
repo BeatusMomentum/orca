@@ -10,8 +10,8 @@ vi.mock('./ssh-relay-gc-claim', () => ({
   releaseRelayGcClaimWithRetry: vi.fn().mockResolvedValue('released'),
   tryAcquireRelayGcClaim: vi.fn().mockResolvedValue('token')
 }))
-vi.mock('./ssh-relay-gc-tombstone', () => ({
-  cleanupRelayGcTombstones: vi.fn().mockResolvedValue(undefined)
+vi.mock('./remote-install-gc-tombstone', () => ({
+  cleanupRemoteInstallGcTombstones: vi.fn().mockResolvedValue(undefined)
 }))
 vi.mock('./ssh-relay-install-lock', () => ({
   RELAY_INSTALL_LOCK_NAME: '.install-lock',
@@ -78,7 +78,9 @@ describe('orcad GC', () => {
       currentDirAbsPath: '/home/u/.orca-remote/orcad-0.2.0+bb',
       record: emptyOrcadActivationRecord()
     })
-    const listCommand = mockExec.mock.calls.map((call) => String(call[1])).find((c) => c.includes('find'))
+    const listCommand = mockExec.mock.calls
+      .map((call) => String(call[1]))
+      .find((c) => c.includes('find'))
     expect(listCommand).toContain("-name 'orcad-*'")
     expect(listCommand).not.toContain("-name 'relay-*'")
   })

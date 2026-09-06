@@ -10,9 +10,26 @@ import type { ClientHostedBrowserRowsEvent } from '../../shared/client-hosted-br
 import type { PublicKnownRuntimeEnvironment } from '../../shared/runtime-environments'
 import type { VerifyAndAddRuntimeEnvironmentResult } from '../../shared/remote-pairing-verification'
 import type {
+  OrcadManagedDeployResult,
+  OrcadManagedPendingMigration,
+  OrcadManagedRecoveryResult,
+  OrcadManagedRollbackResult,
+  OrcadManagedRuntimeStatus,
+  OrcadManagedStopResult
+} from '../../shared/orcad-managed-runtime'
+import type { OrcadMigrationPreflight } from '../../shared/orcad-migration-preflight'
+import type {
   BrowserClientHostPlacementPreparationRequest,
   BrowserPageCreationPlacement
 } from '../../shared/browser-client-host-placement'
+import type {
+  PtyOwnershipTransferExecuteRequest,
+  PtyOwnershipTransferExecuteResult,
+  PtyOwnershipTransferPreflightRequest,
+  PtyOwnershipTransferPreflightResult,
+  PtyOwnershipTransferStatusProbeRequest
+} from '../../shared/pty-ownership-transfer-orchestration'
+import type { PtyOwnershipTransferStatusResult } from '../../shared/pty-ownership-transfer-wire'
 
 export type RuntimeEnvironmentSubscriptionHandle = {
   unsubscribe: () => void
@@ -25,6 +42,15 @@ export type RuntimeApi = {
       graph: RuntimeRendererSyncWindowGraph
     ) => Promise<RuntimeSyncWindowGraphResult>
     getStatus: () => Promise<RuntimeStatus>
+    transferPtyOwnership?: (
+      request: PtyOwnershipTransferExecuteRequest
+    ) => Promise<PtyOwnershipTransferExecuteResult>
+    preflightPtyOwnershipTransfer?: (
+      request: PtyOwnershipTransferPreflightRequest
+    ) => Promise<PtyOwnershipTransferPreflightResult>
+    getPtyOwnershipTransferStatus?: (
+      request: PtyOwnershipTransferStatusProbeRequest
+    ) => Promise<PtyOwnershipTransferStatusResult>
     call: (args: { method: string; params?: unknown }) => Promise<RuntimeRpcResponse<unknown>>
     getTerminalFitOverrides: () => Promise<
       { ptyId: string; mode: 'mobile-fit' | 'remote-desktop-fit'; cols: number; rows: number }[]
@@ -83,6 +109,18 @@ export type RuntimeApi = {
       allowLoopback?: boolean
     }) => Promise<VerifyAndAddRuntimeEnvironmentResult>
     resolve: (args: { selector: string }) => Promise<PublicKnownRuntimeEnvironment>
+    listPendingOrcadMigrations: () => Promise<OrcadManagedPendingMigration[]>
+    preflightOrcadTarget: (args: { sshTargetId: string }) => Promise<OrcadMigrationPreflight>
+    deployOrcad: (args: {
+      name: string
+      sshTargetId: string
+      force?: boolean
+    }) => Promise<OrcadManagedDeployResult>
+    updateOrcad: (args: { selector: string; force?: boolean }) => Promise<OrcadManagedDeployResult>
+    getOrcadStatus: (args: { selector: string }) => Promise<OrcadManagedRuntimeStatus>
+    rollbackOrcad: (args: { selector: string }) => Promise<OrcadManagedRollbackResult>
+    recoverOrcad: (args: { selector: string }) => Promise<OrcadManagedRecoveryResult>
+    stopOrcad: (args: { selector: string }) => Promise<OrcadManagedStopResult>
     remove: (args: { selector: string }) => Promise<{ removed: PublicKnownRuntimeEnvironment }>
     disconnect: (args: {
       selector: string

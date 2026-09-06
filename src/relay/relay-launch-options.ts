@@ -18,6 +18,7 @@ export type RelayLaunchOptions = {
   connectMode: boolean
   detached: boolean
   cliMode: boolean
+  enableOwnershipTransferMutation: boolean
   sockPath: string
   endpointDir?: string
   logFile?: string
@@ -29,6 +30,7 @@ export function parseRelayLaunchOptions(argv: string[]): RelayLaunchOptions {
   let connectMode = false
   let detached = false
   let cliMode = false
+  let enableOwnershipTransferMutation = false
   let sockPath = ''
   let endpointDir: string | undefined
   let logFile: string | undefined
@@ -47,6 +49,8 @@ export function parseRelayLaunchOptions(argv: string[]): RelayLaunchOptions {
       cliMode = true
     } else if (argv[i] === '--detached') {
       detached = true
+    } else if (argv[i] === '--enable-ownership-transfer-mutation') {
+      enableOwnershipTransferMutation = true
     } else if (argv[i] === '--sock-path' && argv[i + 1]) {
       sockPath = argv[i + 1]
       i++
@@ -69,6 +73,7 @@ export function parseRelayLaunchOptions(argv: string[]): RelayLaunchOptions {
     connectMode,
     detached,
     cliMode,
+    enableOwnershipTransferMutation,
     sockPath,
     endpointDir,
     logFile,

@@ -13,7 +13,7 @@ import {
 import { buildWindowsPowerShellSpawnAttempts } from './windows-shell-fallback-chain'
 import { resolveProcessCwd } from './process-cwd'
 import { existsSync } from 'node:fs'
-import * as pty from 'node-pty'
+import type * as pty from 'node-pty'
 import { getDefaultWslDistro, parseWslPath, isWslAvailableAsync } from '../wsl'
 import { splitWorktreeIdForFilesystem } from '../../shared/worktree/id'
 import { isBracketedPasteSafeShell } from '../../shared/startup-command-submission'
@@ -27,6 +27,12 @@ import {
 import { dropInheritedOrcaFishHistory } from '../fish-history-session'
 import { dropInheritedOrcaHistFile } from '../worktree-history-file-path'
 import type { IPtyProvider, PtyProcessInfo, PtySpawnOptions, PtySpawnResult } from './types'
+import {
+  PTY_OWNERSHIP_BRIDGE_DEFAULT_INPUT_IDS,
+  PTY_OWNERSHIP_BRIDGE_DEFAULT_REPLAY_BYTES,
+  PTY_OWNERSHIP_BRIDGE_PROTOCOL_VERSION,
+  type PtyOwnershipBridgeCapabilities
+} from '../../shared/pty-ownership-bridge-contract'
 import {
   ensureNodePtySpawnHelperExecutable,
   validateWorkingDirectory,
@@ -159,6 +165,8 @@ const ptyLoadGeneration = new Map<string, number>()
 type DataCallback = (payload: {
   id: string
   data: string
+  /** Exact process incarnation for durable ownership-transfer journaling. */
+  incarnationId?: string
   sequenceChars?: number
   transformed?: boolean
   seq?: number
@@ -173,6 +181,7 @@ type ExitCallback = (payload: {
 const dataListeners = new Set<DataCallback>()
 const exitListeners = new Set<ExitCallback>()
 const startupIngressByPty = new Map<string, PtyStartupIngress>()
+const ownershipTransferInputFences = new Set<string>()
 
 /**
  * Returns a stable default cwd for locally spawned PTYs.
@@ -300,6 +309,7 @@ function clearPtyState(id: string): void {
   ptyTerminationMode.delete(id)
   ptyReportsChildExitStatus.delete(id)
   ptyPhysicalExits.delete(id)
+  ownershipTransferInputFences.delete(id)
 }
 
 function createPtyPhysicalExit(id: string): void {
@@ -526,6 +536,8 @@ function requestPtyTermination(id: string, proc: pty.IPty): void {
 }
 
 export type LocalPtyProviderOptions = {
+  /** Optional native spawn injection used by deterministic provider tests. */
+  ptySpawn?: typeof pty.spawn
   /** Why: `ctx.command` (pi/omp/claude) must drive overlay source-dir selection — a disk-presence fallback shadows the other agent's extensions. */
   buildSpawnEnv?: (
     id: string,
@@ -937,6 +949,10 @@ export class LocalPtyProvider implements IPtyProvider {
     if (concurrentWinner) {
       return concurrentWinner
     }
+    // Keep node-pty lazy: the headless Bun bundle imports this provider for its shared
+    // contracts, but must not load the Node native addon during startup. Dynamic import also
+    // preserves the injectable module boundary used by the Electron PTY test harness.
+    const ptySpawn = this.opts.ptySpawn ?? (await import('node-pty')).spawn
     const spawnResult = spawnShellWithFallback({
       shellPath,
       shellArgs,
@@ -945,7 +961,7 @@ export class LocalPtyProvider implements IPtyProvider {
       cwd: effectiveCwd,
       env: finalEnv,
       termName: finalEnv.TERM,
-      ptySpawn: pty.spawn,
+      ptySpawn,
       getShellReadyConfig: getFallbackShellReadyConfig,
       launchEnvKeys: primaryLaunchEnvKeys,
       // Why: on zsh→bash fallback HISTFILE still points to zsh_history; update before spawn so the child inherits it (design doc §8).
@@ -1016,11 +1032,12 @@ export class LocalPtyProvider implements IPtyProvider {
             ? {
                 id,
                 data: emission.data,
+                incarnationId,
                 sequenceChars,
                 seq: emission.rawEndSeq,
                 transformed: true
               }
-            : { id, data: emission.data }
+            : { id, data: emission.data, incarnationId }
         )
       }
     }
@@ -1212,7 +1229,25 @@ export class LocalPtyProvider implements IPtyProvider {
   hasPty(id: string): boolean {
     return ptyProcesses.has(id)
   }
+  setInputFenced(id: string, fenced: boolean): void {
+    if (!fenced) {
+      ownershipTransferInputFences.delete(id)
+      return
+    }
+    if (ptyProcesses.has(id)) {
+      ownershipTransferInputFences.add(id)
+    }
+  }
   write(id: string, data: string): boolean {
+    if (ownershipTransferInputFences.has(id)) {
+      return false
+    }
+    return this.writeUnfenced(id, data)
+  }
+  writeOwnershipTransferInput(id: string, data: string): boolean {
+    return ownershipTransferInputFences.has(id) && this.writeUnfenced(id, data)
+  }
+  private writeUnfenced(id: string, data: string): boolean {
     // Cooked PTYs echo private DSR/OSC replies; CPR/DA stay immediate unless one of
     // those is still held, which they must not overtake (#13137, #7329, #15559).
     if (startupIngressByPty.get(id)?.answerLiveQueryReply(data)) {
@@ -1598,6 +1633,18 @@ export class LocalPtyProvider implements IPtyProvider {
       ...(ptyTerminalHandle.get(id) ? { terminalHandle: ptyTerminalHandle.get(id) } : {}),
       ...(ptyWslDistroById.has(id) ? { wslDistro: ptyWslDistroById.get(id) ?? null } : {})
     }))
+  }
+
+  async getOwnershipBridgeCapabilities(): Promise<PtyOwnershipBridgeCapabilities> {
+    return {
+      protocolVersions: [PTY_OWNERSHIP_BRIDGE_PROTOCOL_VERSION],
+      maxReplayBytes: PTY_OWNERSHIP_BRIDGE_DEFAULT_REPLAY_BYTES,
+      maxInputIds: PTY_OWNERSHIP_BRIDGE_DEFAULT_INPUT_IDS,
+      inputDeduplication: true,
+      rollback: true,
+      // Local PTYs remain desktop-owned until a transport adapter exists.
+      liveTransfer: false
+    }
   }
 
   async getDefaultShell(): Promise<string> {

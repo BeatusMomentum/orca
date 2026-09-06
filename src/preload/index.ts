@@ -187,6 +187,15 @@ import type {
 } from '../shared/runtime-types'
 import type { RuntimeRpcResponse } from '../shared/runtime-rpc-envelope'
 import type { PublicKnownRuntimeEnvironment } from '../shared/runtime-environments'
+import type {
+  OrcadManagedDeployResult,
+  OrcadManagedPendingMigration,
+  OrcadManagedRecoveryResult,
+  OrcadManagedRollbackResult,
+  OrcadManagedRuntimeStatus,
+  OrcadManagedStopResult
+} from '../shared/orcad-managed-runtime'
+import type { OrcadMigrationPreflight } from '../shared/orcad-migration-preflight'
 import type { RemoteWorkspaceChangedEvent } from '../shared/remote-workspace-types'
 import type {
   RuntimeMobileMarkdownRequest,
@@ -1068,11 +1077,16 @@ const api = {
       agentResumeUnavailable?: true
     }> => ipcRenderer.invoke('pty:spawn', opts),
 
-    write: (id: string, data: string): void => {
-      ipcRenderer.send('pty:write', { id, data })
+    write: (id: string, data: string, options?: { operationId?: string }): void => {
+      ipcRenderer.send('pty:write', { id, data, ...options })
     },
-    writeAccepted: (id: string, data: string): Promise<boolean> =>
-      ipcRenderer.invoke('pty:writeAccepted', { id, data }),
+    writeAccepted: (
+      id: string,
+      data: string,
+      options?: { operationId?: string }
+    ): Promise<boolean> => ipcRenderer.invoke('pty:writeAccepted', { id, data, ...options }),
+    retireWriteOperation: (id: string, operationId: string): Promise<boolean> =>
+      ipcRenderer.invoke('pty:retireWriteOperation', { id, operationId }),
     onWriteUnavailable: (callback: (payload: { id: string }) => void): (() => void) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: { id: string }): void =>
         callback(payload)
@@ -4560,6 +4574,11 @@ const api = {
     ): Promise<RuntimeSyncWindowGraphResult> =>
       ipcRenderer.invoke('runtime:syncWindowGraph', graph),
     getStatus: (): Promise<RuntimeStatus> => ipcRenderer.invoke('runtime:getStatus'),
+    transferPtyOwnership: (request) => ipcRenderer.invoke('runtime:transferPtyOwnership', request),
+    preflightPtyOwnershipTransfer: (request) =>
+      ipcRenderer.invoke('runtime:preflightPtyOwnershipTransfer', request),
+    getPtyOwnershipTransferStatus: (request) =>
+      ipcRenderer.invoke('runtime:getPtyOwnershipTransferStatus', request),
     call: (args: { method: string; params?: unknown }): Promise<RuntimeRpcResponse<unknown>> =>
       ipcRenderer.invoke('runtime:call', args),
     getTerminalFitOverrides: (): Promise<
@@ -4680,6 +4699,26 @@ const api = {
       ipcRenderer.invoke('runtimeEnvironments:verifyAndAddFromPairingCode', args),
     resolve: (args: { selector: string }): Promise<PublicKnownRuntimeEnvironment> =>
       ipcRenderer.invoke('runtimeEnvironments:resolve', args),
+    listPendingOrcadMigrations: (): Promise<OrcadManagedPendingMigration[]> =>
+      ipcRenderer.invoke('runtimeEnvironments:listPendingOrcadMigrations'),
+    preflightOrcadTarget: (args: { sshTargetId: string }): Promise<OrcadMigrationPreflight> =>
+      ipcRenderer.invoke('runtimeEnvironments:preflightOrcadTarget', args),
+    deployOrcad: (args: {
+      name: string
+      sshTargetId: string
+      force?: boolean
+    }): Promise<OrcadManagedDeployResult> =>
+      ipcRenderer.invoke('runtimeEnvironments:deployOrcad', args),
+    updateOrcad: (args: { selector: string; force?: boolean }): Promise<OrcadManagedDeployResult> =>
+      ipcRenderer.invoke('runtimeEnvironments:updateOrcad', args),
+    getOrcadStatus: (args: { selector: string }): Promise<OrcadManagedRuntimeStatus> =>
+      ipcRenderer.invoke('runtimeEnvironments:getOrcadStatus', args),
+    rollbackOrcad: (args: { selector: string }): Promise<OrcadManagedRollbackResult> =>
+      ipcRenderer.invoke('runtimeEnvironments:rollbackOrcad', args),
+    recoverOrcad: (args: { selector: string }): Promise<OrcadManagedRecoveryResult> =>
+      ipcRenderer.invoke('runtimeEnvironments:recoverOrcad', args),
+    stopOrcad: (args: { selector: string }): Promise<OrcadManagedStopResult> =>
+      ipcRenderer.invoke('runtimeEnvironments:stopOrcad', args),
     remove: (args: { selector: string }): Promise<{ removed: PublicKnownRuntimeEnvironment }> =>
       ipcRenderer.invoke('runtimeEnvironments:remove', args),
     disconnect: (args: {

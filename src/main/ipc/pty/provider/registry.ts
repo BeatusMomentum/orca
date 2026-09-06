@@ -9,6 +9,7 @@ import { ptyOwnership } from './ownership-state'
 export let localProvider: IPtyProvider = new LocalPtyProvider()
 export const sshProviders = new Map<string, IPtyProvider>()
 export const sshProvidersByGeneration = new Map<number, IPtyProvider>()
+const localProviderChangeListeners = new Set<(provider: IPtyProvider) => void>()
 
 export type RegisteredPtyProvider = {
   provider: IPtyProvider
@@ -124,8 +125,22 @@ export function getLocalPtyProvider(): IPtyProvider {
   return localProvider
 }
 
+export function subscribeLocalPtyProviderChanges(
+  listener: (provider: IPtyProvider) => void
+): () => void {
+  localProviderChangeListeners.add(listener)
+  return () => localProviderChangeListeners.delete(listener)
+}
+
 /** Replace the local PTY provider with a daemon-backed one.
  *  Call before registerPtyHandlers so the IPC layer routes through the daemon. */
 export function setLocalPtyProvider(provider: IPtyProvider): void {
   localProvider = provider
+  for (const listener of localProviderChangeListeners) {
+    try {
+      listener(provider)
+    } catch (error) {
+      console.warn('[pty-provider] local provider change listener failed:', error)
+    }
+  }
 }

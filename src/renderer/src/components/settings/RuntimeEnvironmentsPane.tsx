@@ -17,6 +17,7 @@ import { toast } from 'sonner'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import type { GlobalSettings } from '../../../../shared/global-settings-types'
 import {
+  isManagedOrcadRuntimeEnvironment,
   isUserManagedRuntimeEnvironment,
   type PublicKnownRuntimeEnvironment
 } from '../../../../shared/runtime-environments'
@@ -62,6 +63,7 @@ import {
   RemoteServerUpdateStatus
 } from './RemoteServerUpdateStatus'
 import { RuntimeHostAccessForm, type RuntimeHostAccessFailure } from './RuntimeHostAccessForm'
+import { ManagedOrcadServersSection } from './ManagedOrcadServersSection'
 
 const LOCAL_RUNTIME_VALUE = '__local__'
 const NO_RUNTIME_VALUE = '__none__'
@@ -266,6 +268,9 @@ export function RuntimeEnvironmentsPane({
   addServerIntentSignal
 }: RuntimeEnvironmentsPaneProps): React.JSX.Element {
   const [environments, setEnvironments] = useState<PublicKnownRuntimeEnvironment[]>([])
+  const [selectableEnvironments, setSelectableEnvironments] = useState<
+    PublicKnownRuntimeEnvironment[]
+  >([])
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [detailsByEnvironmentId, setDetailsByEnvironmentId] = useState<
@@ -319,7 +324,10 @@ export function RuntimeEnvironmentsPane({
       }
       try {
         const nextEnvironments = await window.api.runtimeEnvironments.list()
-        const visibleEnvironments = nextEnvironments.filter(isUserManagedRuntimeEnvironment)
+        const selectable = nextEnvironments.filter(isUserManagedRuntimeEnvironment)
+        const visibleEnvironments = selectable.filter(
+          (environment) => !isManagedOrcadRuntimeEnvironment(environment)
+        )
         // Why: drop store status for servers no longer saved so stale hosts don't
         // linger in the sidebar registry.
         useAppStore.getState().setRuntimeEnvironments(nextEnvironments)
@@ -331,6 +339,7 @@ export function RuntimeEnvironmentsPane({
         }
         if (mountedRef.current) {
           setEnvironments(visibleEnvironments)
+          setSelectableEnvironments(selectable)
           setDetailsByEnvironmentId((current) => {
             const next: Record<string, RuntimeHostDetails> = {}
             for (const environment of visibleEnvironments) {
@@ -760,7 +769,10 @@ export function RuntimeEnvironmentsPane({
     if (value === NO_RUNTIME_VALUE) {
       return 'No server connected'
     }
-    return environments.find((environment) => environment.id === value)?.name ?? 'remote server'
+    return (
+      selectableEnvironments.find((environment) => environment.id === value)?.name ??
+      'remote server'
+    )
   }
   const visibleWorkflow: RemoteServerWorkflow = addServerFormOpen ? 'connect' : workflow
 
@@ -849,6 +861,10 @@ export function RuntimeEnvironmentsPane({
       </div>
 
       <div className={cn('space-y-3', visibleWorkflow !== 'connect' && 'hidden')}>
+        <ManagedOrcadServersSection
+          activeEnvironmentId={settings.activeRuntimeEnvironmentId}
+          onEnvironmentsChanged={loadEnvironments}
+        />
         <div
           data-settings-section="remote-server-updates"
           className="flex items-center justify-between gap-3"
@@ -1200,7 +1216,7 @@ export function RuntimeEnvironmentsPane({
                           'Local desktop'
                         )}
                       </SelectItem>
-                    ) : environments.length === 0 ? (
+                    ) : selectableEnvironments.length === 0 ? (
                       <SelectItem value={NO_RUNTIME_VALUE} disabled>
                         {translate(
                           'auto.components.settings.RuntimeEnvironmentsPane.b07070ed3c',
@@ -1208,7 +1224,7 @@ export function RuntimeEnvironmentsPane({
                         )}
                       </SelectItem>
                     ) : null}
-                    {environments.map((environment) => (
+                    {selectableEnvironments.map((environment) => (
                       <SelectItem key={environment.id} value={environment.id}>
                         {environment.name}
                       </SelectItem>

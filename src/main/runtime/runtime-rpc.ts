@@ -74,6 +74,8 @@ type OrcaRuntimeRpcServerOptions = {
   wsPort?: number
   // Why: true when the caller pinned a port (`orca serve --port`) so bind order prefers it over a stale STA-1511 fallback (#8535).
   preferPinnedWsPort?: boolean
+  // Why: managed SSH tunnels cannot follow a fallback port, so failure to bind must fail startup.
+  requirePinnedWsPort?: boolean
   // Why: STA-2370 — bind the WS listener to all interfaces at startup instead of loopback-until-paired.
   // Only `orca serve` (explicit remote opt-in) and E2E set this; the desktop app widens lazily on pairing.
   exposeNetworkByDefault?: boolean
@@ -510,6 +512,7 @@ export class OrcaRuntimeRpcServer {
   private readonly enableWebSocket: boolean
   private readonly wsPort: number
   private readonly preferPinnedWsPort: boolean
+  private readonly requirePinnedWsPort: boolean
   private readonly exposeNetworkByDefault: boolean
   private readonly pinnedBindHost: string | null
   private readonly webClientRoot: string | undefined
@@ -571,6 +574,7 @@ export class OrcaRuntimeRpcServer {
     enableWebSocket = false,
     wsPort = DEFAULT_WS_PORT,
     preferPinnedWsPort = false,
+    requirePinnedWsPort = false,
     exposeNetworkByDefault = false,
     pinnedBindHost,
     webClientRoot,
@@ -587,6 +591,7 @@ export class OrcaRuntimeRpcServer {
     this.enableWebSocket = enableWebSocket
     this.wsPort = wsPort
     this.preferPinnedWsPort = preferPinnedWsPort
+    this.requirePinnedWsPort = requirePinnedWsPort
     this.exposeNetworkByDefault = exposeNetworkByDefault
     this.pinnedBindHost = pinnedBindHost ?? null
     this.webClientRoot = webClientRoot
@@ -1206,7 +1211,9 @@ export class OrcaRuntimeRpcServer {
             port: this.wsPort,
             preferPinnedPort: this.preferPinnedWsPort,
             // Why: stable fallback port across restarts keeps paired devices' endpoints valid (STA-1511); wsPort 0 = random (E2E).
-            ...(this.wsPort !== 0 ? { fallbackPort: readWsFallbackPort(this.userDataPath) } : {})
+            ...(this.wsPort !== 0 && !this.requirePinnedWsPort
+              ? { fallbackPort: readWsFallbackPort(this.userDataPath) }
+              : {})
           })
           if (this.wsPort !== 0 && transport.resolvedPort !== this.wsPort) {
             writeWsFallbackPort(this.userDataPath, transport.resolvedPort)
@@ -1214,6 +1221,10 @@ export class OrcaRuntimeRpcServer {
           activeTransports.push(transport)
           transportsMeta.push({ kind: 'websocket', endpoint })
         } catch (error) {
+          if (this.requirePinnedWsPort) {
+            await socketTransport.stop().catch(() => {})
+            throw error
+          }
           // Why: WebSocket transport is supplementary; on failure (e.g. port in use) continue with Unix socket only.
           console.error('[runtime] Failed to start WebSocket transport:', error)
           this.mobileSocketWiring = null
@@ -1290,6 +1301,7 @@ export class OrcaRuntimeRpcServer {
       host: options.host,
       port: options.port,
       staticRoot: this.webClientRoot,
+      ...(this.requirePinnedWsPort ? { strictPort: true } : {}),
       ...(options.fallbackPort !== undefined ? { fallbackPort: options.fallbackPort } : {}),
       ...(options.preferPinnedPort ? { preferPinnedPort: true } : {})
     })
@@ -1781,6 +1793,7 @@ export class OrcaRuntimeRpcServer {
         // Why: the validated credential preserves existing federation ownership without trusting request fields.
         authenticatedCallerFingerprint: fingerprintAuthenticatedPairingCredential(token),
         connectionId,
+        transportGeneration: authenticatedSocket?.connectionGeneration,
         clientId: token,
         pairedDeviceId: device.deviceId,
         // Why: gates the mobile-only payload diet so full-screen web/desktop clients aren't truncated.

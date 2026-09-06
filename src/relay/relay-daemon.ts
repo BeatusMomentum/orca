@@ -10,6 +10,8 @@ import { RelaySocketOwnership } from './relay-socket-ownership'
 import { RelayReconnectListener } from './relay-reconnect-listener'
 import { RelayGraceLifecycle } from './relay-grace-lifecycle'
 import { SKILL_RELAY_CAPABILITIES } from './skill-install-handler'
+import { endpointDirForRelaySocket } from './agent-hook-endpoint-coordinates'
+import { join } from 'node:path'
 
 export async function runRelayDaemon(
   options: RelayLaunchOptions,
@@ -34,7 +36,16 @@ export async function runRelayDaemon(
   const runtime = new RelayRuntimeServices(
     primaryChannel.dispatcher,
     options.graceTimeMs,
-    launchVersion
+    launchVersion,
+    {
+      // Keep transfer journals beside the relay endpoint so they survive a
+      // daemon restart without sharing the hook spool itself.
+      ownershipTransferStoreDirectory: join(
+        options.endpointDir ?? endpointDirForRelaySocket(options.sockPath),
+        'pty-ownership-transfer'
+      ),
+      enableOwnershipTransferMutation: options.enableOwnershipTransferMutation
+    }
   )
   let reconnectListener: RelayReconnectListener | null = null
   const agentHooks = new RelayAgentHookRuntime(
@@ -126,8 +137,12 @@ function registerRelayStatus(
   startedAt: number
 ): void {
   primaryChannel.dispatcher.onRequest('relay.status', async () => ({
+    ...runtime.ptyHandler.getPtyRuntimeIdentity(),
     capabilities: SKILL_RELAY_CAPABILITIES,
     pid: process.pid,
+    ...(typeof process.versions.bun === 'string'
+      ? { runtimeVersion: process.versions.bun }
+      : {}),
     uptimeMs: Date.now() - startedAt,
     detached: options.detached,
     stdoutAlive: primaryChannel.isAlive,

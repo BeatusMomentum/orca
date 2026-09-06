@@ -28,10 +28,13 @@ import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import process from 'node:process'
+import { ORCAD_BUN_RUNTIME_FILENAME } from '../../src/shared/orcad-artifacts.ts'
 
 const projectDir = resolve(import.meta.dirname, '../..')
 const serveEntry = join(projectDir, 'out', 'main', 'index.js')
-const ORCAD_ENTRY = join(projectDir, 'out', 'orcad', 'orcad.js')
+const ORCAD_ENTRY = process.env.ORCA_SMOKE_ORCAD_ENTRY
+  ? resolve(process.env.ORCA_SMOKE_ORCAD_ENTRY)
+  : join(projectDir, 'out', 'orcad', 'orcad.js')
 const READY_TIMEOUT_MS = 120_000
 const OUTPUT_TIMEOUT_MS = 30_000
 const SHUTDOWN_TIMEOUT_MS = 15_000
@@ -178,12 +181,19 @@ function resolveLaunch(userDataDir) {
       runtimeIndex !== -1
         ? process.argv[runtimeIndex + 1]
         : (process.env.ORCA_SMOKE_RUNTIME ?? 'node')
-    if (runtime !== 'node' && runtime !== 'bun') {
-      throw new Error(`--runtime (or ORCA_SMOKE_RUNTIME) must be 'node' or 'bun', got '${runtime}'`)
+    if (runtime !== 'node' && runtime !== 'bun' && runtime !== 'bundled-bun') {
+      throw new Error(
+        `--runtime (or ORCA_SMOKE_RUNTIME) must be 'node', 'bun', or 'bundled-bun', got '${runtime}'`
+      )
     }
     return {
       label: `orcad/${runtime} (${ORCAD_ENTRY})`,
-      command: runtime === 'bun' ? (process.env.BUN_EXECUTABLE ?? 'bun') : process.execPath,
+      command:
+        runtime === 'bundled-bun'
+          ? join(dirname(ORCAD_ENTRY), ORCAD_BUN_RUNTIME_FILENAME)
+          : runtime === 'bun'
+            ? (process.env.BUN_EXECUTABLE ?? 'bun')
+            : process.execPath,
       args: [ORCAD_ENTRY, '--port', String(PORT), '--json'],
       env: { ORCA_USER_DATA: userDataDir }
     }

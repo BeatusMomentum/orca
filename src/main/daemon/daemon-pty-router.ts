@@ -9,9 +9,18 @@ import type {
   PtySpawnResult
 } from '../providers/types'
 import type { PtyProcessInspection } from '../providers/pty-process-inspection'
+import { PtyOwnershipTransferInputFence } from '../providers/pty-ownership-transfer-input-fence'
 import { shouldHandoffDaemonHistory } from './daemon-history-handoff'
 import type { DaemonPtyRouterDataEvent, DaemonPtyRouterExitEvent } from './daemon-pty-router-events'
 import { DaemonSessionOwnerResolver } from './daemon-session-owner-resolution'
+import type { DaemonIdleRetirementResult } from './daemon-pty-runtime-state'
+import { CLEAN_DISCONNECT_PROTOCOL_VERSION } from './types'
+import {
+  PTY_OWNERSHIP_BRIDGE_DEFAULT_INPUT_IDS,
+  PTY_OWNERSHIP_BRIDGE_DEFAULT_REPLAY_BYTES,
+  PTY_OWNERSHIP_BRIDGE_PROTOCOL_VERSION,
+  type PtyOwnershipBridgeCapabilities
+} from '../../shared/pty-ownership-bridge-contract'
 
 export class DaemonPtyRouter implements IPtyProvider {
   private current: DaemonPtyAdapter
@@ -19,6 +28,10 @@ export class DaemonPtyRouter implements IPtyProvider {
   private sessionAdapters = new Map<string, DaemonPtyAdapter>()
   private readonly ownerResolver: DaemonSessionOwnerResolver<DaemonPtyAdapter>
   private readonly subscriptions: DaemonPtyAdapterSubscriptionFanout
+  private readonly ownershipTransferInputFence = new PtyOwnershipTransferInputFence()
+  private idleRetirementAdmissionClosed = false
+  private spawnInFlight = 0
+  private idleRetirementPromise: Promise<DaemonIdleRetirementResult> | null = null
 
   constructor(opts: { current: DaemonPtyAdapter; legacy: DaemonPtyAdapter[] }) {
     this.current = opts.current
@@ -28,6 +41,7 @@ export class DaemonPtyRouter implements IPtyProvider {
       this.allAdapters(),
       (id) => {
         this.ownerResolver.forgetRoute(id)
+        this.ownershipTransferInputFence.remove(id)
       },
       (adapter) => this.ownerResolver.invalidateProvider(adapter)
     )
@@ -38,17 +52,86 @@ export class DaemonPtyRouter implements IPtyProvider {
   }
 
   async spawn(opts: PtySpawnOptions): Promise<PtySpawnResult> {
-    if (opts.attachOnly && opts.sessionId) {
-      return await this.ownerResolver.spawnAttachOnly({ ...opts, sessionId: opts.sessionId })
+    if (this.idleRetirementAdmissionClosed) {
+      throw new Error('Terminal daemon is decommissioning')
     }
-    const adapter = opts.sessionId ? this.sessionAdapters.get(opts.sessionId) : undefined
-    const target = adapter ?? this.current
-    const result = await target.spawn(opts)
-    // Why: the adapter filters intentional recovery exits and canonical-ID races before publishing proof.
-    if (!result.exitedBeforeSpawnReply) {
-      this.ownerResolver.recordRoute(result.id, target, result.incarnationId)
+    this.spawnInFlight++
+    try {
+      if (opts.attachOnly && opts.sessionId) {
+        return await this.ownerResolver.spawnAttachOnly({ ...opts, sessionId: opts.sessionId })
+      }
+      const adapter = opts.sessionId ? this.sessionAdapters.get(opts.sessionId) : undefined
+      const target = adapter ?? this.current
+      const result = await target.spawn(opts)
+      if (result.isReattach !== true) {
+        this.ownershipTransferInputFence.remove(result.id)
+      }
+      // Why: the adapter filters intentional recovery exits and canonical-ID races before publishing proof.
+      if (!result.exitedBeforeSpawnReply) {
+        this.ownerResolver.recordRoute(result.id, target, result.incarnationId)
+      }
+      return result
+    } finally {
+      this.spawnInFlight--
     }
-    return result
+  }
+
+  async requestIdleRetirement(): Promise<DaemonIdleRetirementResult> {
+    if (this.idleRetirementPromise) {
+      return this.idleRetirementPromise
+    }
+    this.idleRetirementAdmissionClosed = true
+    const request = this.finishIdleRetirementRequest().finally(() => {
+      if (this.idleRetirementPromise === request) {
+        this.idleRetirementPromise = null
+      }
+    })
+    this.idleRetirementPromise = request
+    return request
+  }
+
+  private async finishIdleRetirementRequest(): Promise<DaemonIdleRetirementResult> {
+    const adapters = this.allAdapters()
+    if (this.spawnInFlight > 0) {
+      this.idleRetirementAdmissionClosed = false
+      return { state: 'busy', liveSessions: null }
+    }
+    if (adapters.some((adapter) => adapter.protocolVersion < CLEAN_DISCONNECT_PROTOCOL_VERSION)) {
+      this.idleRetirementAdmissionClosed = false
+      return { state: 'unsupported' }
+    }
+    const inventories = await Promise.allSettled(adapters.map((adapter) => adapter.listSessions()))
+    if (inventories.some((inventory) => inventory.status === 'rejected')) {
+      this.idleRetirementAdmissionClosed = false
+      return { state: 'unverifiable' }
+    }
+    const liveSessions = inventories.reduce(
+      (count, inventory) =>
+        count +
+        (inventory.status === 'fulfilled'
+          ? inventory.value.filter((session) => session.isAlive).length
+          : 0),
+      0
+    )
+    if (liveSessions > 0) {
+      this.idleRetirementAdmissionClosed = false
+      return { state: 'busy', liveSessions }
+    }
+    const results = await Promise.all(adapters.map((adapter) => adapter.requestIdleRetirement()))
+    if (results.every((result) => result.state === 'retiring')) {
+      return { state: 'retiring' }
+    }
+    const refusedLiveSessions = results.reduce(
+      (count, result) => count + (result.state === 'busy' ? (result.liveSessions ?? 0) : 0),
+      0
+    )
+    if (refusedLiveSessions > 0) {
+      return { state: 'busy', liveSessions: refusedLiveSessions }
+    }
+    if (results.every((result) => result.state === 'busy' || result.state === 'unsupported')) {
+      this.idleRetirementAdmissionClosed = false
+    }
+    return { state: 'unverifiable' }
   }
 
   supportsGitCredentialGuardHost(sessionId?: string): boolean {
@@ -73,6 +156,18 @@ export class DaemonPtyRouter implements IPtyProvider {
     return this.current.supportsAgentSessionCreateOperations()
   }
 
+  async getOwnershipBridgeCapabilities(): Promise<PtyOwnershipBridgeCapabilities> {
+    return {
+      protocolVersions: [PTY_OWNERSHIP_BRIDGE_PROTOCOL_VERSION],
+      maxReplayBytes: PTY_OWNERSHIP_BRIDGE_DEFAULT_REPLAY_BYTES,
+      maxInputIds: PTY_OWNERSHIP_BRIDGE_DEFAULT_INPUT_IDS,
+      inputDeduplication: true,
+      rollback: true,
+      // The router has no source mutation adapter yet; keep host-local preflight explicit and dormant.
+      liveTransfer: false
+    }
+  }
+
   async attach(id: string): ReturnType<IPtyProvider['attach']> {
     return await this.adapterFor(id).attach(id)
   }
@@ -89,12 +184,26 @@ export class DaemonPtyRouter implements IPtyProvider {
     return await this.ownerResolver.probe(id)
   }
 
+  setInputFenced(id: string, fenced: boolean): void {
+    this.ownershipTransferInputFence.set(id, fenced, this.hasPty(id))
+  }
+
   write(id: string, data: string): boolean {
-    return this.adapterFor(id).write(id, data)
+    return this.ownershipTransferInputFence.permits(id)
+      ? this.adapterFor(id).write(id, data)
+      : false
+  }
+
+  writeOwnershipTransferInput(id: string, data: string): boolean {
+    return this.ownershipTransferInputFence.permits(id)
+      ? false
+      : this.adapterFor(id).write(id, data)
   }
 
   writeWithSettlement(id: string, data: string): Promise<boolean> {
-    return this.adapterFor(id).writeWithSettlement(id, data)
+    return this.ownershipTransferInputFence.permits(id)
+      ? this.adapterFor(id).writeWithSettlement(id, data)
+      : Promise.resolve(false)
   }
 
   resize(id: string, cols: number, rows: number): void {
@@ -277,6 +386,7 @@ export class DaemonPtyRouter implements IPtyProvider {
   }
 
   dispose(): void {
+    this.ownershipTransferInputFence.clear()
     this.subscriptions.dispose()
     for (const adapter of this.allAdapters()) {
       adapter.dispose()

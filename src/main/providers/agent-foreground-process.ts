@@ -28,6 +28,7 @@ export type AgentForegroundProcessResolution = {
 }
 
 type ShellForegroundConfirmationOptions = {
+  jobRootProcessIsWrapper?: boolean
   readWindowsPtyJobProcessIds?: () =>
     | ReadonlySet<number>
     | null
@@ -81,7 +82,10 @@ export async function confirmShellForegroundProcess(
   if (process.platform === 'win32') {
     try {
       const processIds = await options.readWindowsPtyJobProcessIds?.()
-      return processIds?.size === 1 && processIds.has(shellPid)
+      return (
+        processIds?.size === 1 &&
+        (options.jobRootProcessIsWrapper === true || processIds.has(shellPid))
+      )
     } catch {
       // Unavailable job inspection is missing proof, never a thrown confirmation.
       return false

@@ -12,7 +12,9 @@ export type SshTarget = {
   label: string
   /** Internal owner for targets that Orca creates as implementation details.
    *  Owned targets are hidden from normal SSH-host management surfaces. */
-  owner?: { type: 'on-demand-runtime'; runtimeId: string }
+  owner?:
+    | { type: 'on-demand-runtime'; runtimeId: string }
+    | { type: 'orcad-runtime'; environmentId: string }
   /** Host alias to resolve through OpenSSH config (ssh -G). */
   configHost?: string
   host: string
