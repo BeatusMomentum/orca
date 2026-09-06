@@ -34,6 +34,7 @@ import {
   copyFileIntoDockerSshRelayTarget,
   DOCKER_SSH_RELAY_REMOTE_REPO_PATH,
   execDockerSshRelayTargetCommand,
+  killDockerSshRelayTargetTransports,
   startDockerSshRelayTarget,
   type DockerSshRelayTarget
 } from './helpers/docker-ssh-relay-target'
@@ -74,7 +75,10 @@ describe.skipIf(process.env.ORCA_REVIEW_ORCAD_SSH_LIFECYCLE !== '1')(
       }
       const local = mkdtempSync(join(tmpdir(), 'orca-independent-ssh-'))
       let target: DockerSshRelayTarget | null = null
-      const manager = new SshConnectionManager({ onStateChange: () => {} })
+      const connectionStates: string[] = []
+      const manager = new SshConnectionManager({
+        onStateChange: (_targetId, state) => connectionStates.push(state.status)
+      })
       const store = new Store({ dataFile: join(local, 'state.json') })
       const targets = new SshConnectionStore(store)
       const originalTunnel = new OrcadManagedTunnelManager({
@@ -131,7 +135,7 @@ describe.skipIf(process.env.ORCA_REVIEW_ORCAD_SSH_LIFECYCLE !== '1')(
         })
         await store.flushPendingOrThrowAsync()
         const connection = await manager.connect(ssh)
-        const originalPort = await originalTunnel.start('original-access', ssh, connection, PORT)
+        const originalPort = await originalTunnel.start(ID, ssh, connection, PORT)
         addEnvironmentFromPairingCode(local, {
           id: ID,
           name: 'Independent server',
@@ -240,6 +244,31 @@ describe.skipIf(process.env.ORCA_REVIEW_ORCAD_SSH_LIFECYCLE !== '1')(
         await closeOrcadManagedTunnel(ID)
         await ensureOrcadManagedTunnel(local, ID)
         await proveSameShell('recovered')
+        const transportGeneration = connection.getTransportGeneration()
+        connectionStates.length = 0
+        expect(killDockerSshRelayTargetTransports(target)).toBeGreaterThan(0)
+        await expect
+          .poll(
+            () =>
+              connectionStates.includes('reconnecting') &&
+              manager.getState(ssh.id)?.status === 'connected' &&
+              connection.getTransportGeneration() > transportGeneration,
+            { timeout: 90_000 }
+          )
+          .toBe(true)
+        await ensureOrcadManagedTunnel(local, ID)
+        await proveSameShell('ssh-reconnected')
+        // The original access route is an independently owned test forward, not a deployment.
+        await originalTunnel.ensure({
+          ...before,
+          connectionDependency: 'ssh-tunnel',
+          orcadDeployment: {
+            sshTargetId: ssh.id,
+            sshTargetGeneration: ssh.generation!,
+            localPort: originalPort,
+            remotePort: PORT
+          }
+        })
         const pid = ready.health?.pid
         expect(ready.health?.terminalDaemon.pid).toBeGreaterThan(0)
         if (!Number.isSafeInteger(pid) || pid! <= 0) {
@@ -299,10 +328,7 @@ describe.skipIf(process.env.ORCA_REVIEW_ORCAD_SSH_LIFECYCLE !== '1')(
         expect(execDockerSshRelayTargetCommand(target, noNode)).toBe('NODE_NPM_ABSENT')
       } finally {
         try {
-          await Promise.allSettled([
-            closeOrcadManagedTunnel(ID),
-            originalTunnel.close('original-access')
-          ])
+          await Promise.allSettled([closeOrcadManagedTunnel(ID), originalTunnel.close(ID)])
           originalTunnel.dispose()
           await manager.disconnectAll()
           await store.flushPendingOrThrowAsync()
