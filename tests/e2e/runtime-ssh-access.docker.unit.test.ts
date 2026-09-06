@@ -28,6 +28,7 @@ import {
 import { sendRemoteRuntimeRequest } from '../../src/shared/remote-runtime-client'
 import { ELECTRON_REMOTE_RUNTIME_CLIENT_CAPABILITIES } from '../../src/shared/protocol-version'
 import { ORCAD_BUN_VERSION } from '../../src/shared/orcad-bun-runtime'
+import { folderWorkspaceKey } from '../../src/shared/workspace-scope'
 import {
   cleanupDockerSshRelayTarget,
   copyFileIntoDockerSshRelayTarget,
@@ -149,32 +150,53 @@ describe.skipIf(process.env.ORCA_REVIEW_ORCAD_SSH_LIFECYCLE !== '1')(
           }
         )
         const worktree = worktrees.find((row) => row.path === DOCKER_SSH_RELAY_REMOTE_REPO_PATH)!
-        const { terminal } = await rpc<{ terminal: { handle: string } }>('terminal.create', {
-          worktree: worktree.id
+        const folderPath = '/tmp/independent-folder-workspace'
+        execDockerSshRelayTargetCommand(target, `mkdir ${folderPath}`)
+        const { group } = await rpc<{ group: { id: string } }>('projectGroup.create', {
+          name: 'Independent non-git project',
+          parentPath: folderPath
         })
-        const proveSameShell = async (suffix: string) => {
+        const { folderWorkspace } = await rpc<{ folderWorkspace: { id: string } }>(
+          'folderWorkspace.create',
+          { projectGroupId: group.id, name: 'Independent folder', folderPath }
+        )
+        const terminals: { handle: string; sentinel: string }[] = []
+        for (const [index, workspace] of [
+          worktree.id,
+          `id:${folderWorkspaceKey(folderWorkspace.id)}`
+        ].entries()) {
+          const { terminal } = await rpc<{ terminal: { handle: string } }>('terminal.create', {
+            worktree: workspace
+          })
+          const sentinel = `incumbent_${index}`
+          terminals.push({ handle: terminal.handle, sentinel })
           await rpc('terminal.send', {
             terminal: terminal.handle,
-            text: `printf '%s_%s\\n' "$ORCA_ACCESS_SENTINEL" '${suffix}'`,
+            text: `export ORCA_ACCESS_SENTINEL=${sentinel}`,
             enter: true
           })
-          await expect
-            .poll(
-              async () =>
-                JSON.stringify(
-                  await rpc('terminal.read', {
-                    terminal: terminal.handle
-                  })
-                ),
-              { timeout: 15_000 }
-            )
-            .toContain(`incumbent_${suffix}`)
         }
-        await rpc('terminal.send', {
-          terminal: terminal.handle,
-          text: 'export ORCA_ACCESS_SENTINEL=incumbent',
-          enter: true
-        })
+        const proveSameShell = async (suffix: string) => {
+          for (const terminal of terminals) {
+            const sent = await rpc<{ send: { accepted: boolean } }>('terminal.send', {
+              terminal: terminal.handle,
+              text: `printf '%s_%s\\n' "$ORCA_ACCESS_SENTINEL" '${suffix}'`,
+              enter: true
+            })
+            expect(sent.send.accepted, `${terminal.sentinel}: ${suffix}`).toBe(true)
+            await expect
+              .poll(
+                async () =>
+                  JSON.stringify(
+                    await rpc('terminal.read', {
+                      terminal: terminal.handle
+                    })
+                  ),
+                { timeout: 15_000 }
+              )
+              .toContain(`${terminal.sentinel}_${suffix}`)
+          }
+        }
         await proveSameShell('before')
         await expect(
           linkRuntimeSshAccess(local, {
@@ -238,6 +260,11 @@ describe.skipIf(process.env.ORCA_REVIEW_ORCAD_SSH_LIFECYCLE !== '1')(
         expect(restarted.runtimeId).toBe(ready.runtimeId)
         expect(restarted.health?.pid).not.toBe(pid)
         expect(restarted.health?.terminalDaemon.pid).toBe(ready.health?.terminalDaemon.pid)
+        expect(await rpc('folderWorkspace.list', undefined)).toMatchObject({
+          folderWorkspaces: expect.arrayContaining([
+            expect.objectContaining({ id: folderWorkspace.id, folderPath })
+          ])
+        })
         await proveSameShell('restarted')
         await unlinkRuntimeSshAccess(
           local,
