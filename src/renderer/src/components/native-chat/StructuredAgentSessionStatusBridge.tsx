@@ -46,16 +46,19 @@ export function getStructuredAgentSessionTabs(
   return tabs
 }
 
+const NO_SUBSCRIPTION = (): (() => void) => () => {}
+
 /** The host's projected status for one session, live while the caller is mounted. */
 function useStructuredAgentSessionStatusSummary(
   sessionId: string,
-  target: RuntimeClientTarget
+  target: RuntimeClientTarget,
+  enabled: boolean
 ): AgentSessionStatusSummary | null {
   const feed = useMemo(() => getStructuredAgentSessionStatusFeed(target), [target])
-  useEffect(() => feed.activate(), [feed])
+  useEffect(() => (enabled ? feed.activate() : undefined), [feed, enabled])
   return useSyncExternalStore(
-    feed.subscribe,
-    () => feed.getSnapshot().get(sessionId) ?? null,
+    enabled ? feed.subscribe : NO_SUBSCRIPTION,
+    () => (enabled ? (feed.getSnapshot().get(sessionId) ?? null) : null),
     () => null
   )
 }
@@ -141,14 +144,27 @@ function StructuredAgentSessionStatusProjection({ tab }: { tab: StructuredTab })
     () => getActiveRuntimeTarget({ activeRuntimeEnvironmentId: environmentId }),
     [environmentId]
   )
-  const summary = useStructuredAgentSessionStatusSummary(tab.entityId, target)
+  // The local host publishes its own sessions into the agent-status store, and the IPC applicator
+  // is the single writer for them. A remote host writes into ITS store, which nothing mirrors down
+  // (the web-session mirror carries terminal surfaces only), so this surface stays that session's
+  // writer until a mirror exists — rule 3 of remote-wire-compatibility.md.
+  const hostPublishesRow = target.kind === 'local'
+  const summary = useStructuredAgentSessionStatusSummary(tab.entityId, target, !hostPublishesRow)
   useEffect(() => {
+    if (hostPublishesRow) {
+      return
+    }
     projectStatus(tab, summary)
-  }, [summary, tab])
+  }, [hostPublishesRow, summary, tab])
+  // Kept for BOTH lanes — this is the "unmount" row of the writer disposition, not a status write.
+  // A projection unmounts when its tab leaves the tab map, which is a close or a host retraction;
+  // the host drops its own row on `agentSession.close` (`forgetStructuredAgentSession`), but that
+  // drop goes through `dropStatusEntry`, which emits no renderer clear, so nothing else would take
+  // this copy out of the store.
   useEffect(
     () => () => {
       const state = useAppStore.getState()
-      // Two surfaces can mirror one session (the `:history-N` id collision path), and they now share
+      // Two surfaces can mirror one session (the `:history-N` id collision path), and they share
       // one pane key. Only the last surface to leave clears the row.
       const stillMirrored = getStructuredAgentSessionTabs(state.unifiedTabsByWorktree).some(
         (candidate) => candidate.entityId === tab.entityId && candidate.id !== tab.id
