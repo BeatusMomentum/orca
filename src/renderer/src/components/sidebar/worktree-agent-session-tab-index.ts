@@ -14,7 +14,7 @@ type UnifiedTabsByWorktree = AppState['unifiedTabsByWorktree']
 export const EMPTY_AGENT_SESSION_TABS: ReadonlyMap<string, Tab> = new Map()
 
 let cache: {
-  unifiedTabsByWorktree: UnifiedTabsByWorktree
+  unifiedTabsByWorktree: UnifiedTabsByWorktree | undefined
   byWorktree: Map<string, Map<string, Tab>>
 } | null = null
 
@@ -23,8 +23,10 @@ export function selectAgentSessionTabsByTabIdForWorktree(
   worktreeId: string
 ): ReadonlyMap<string, Tab> {
   const unifiedTabsByWorktree = state.unifiedTabsByWorktree
-  // `!cache` first: an undefined slice makes the identity compare equal against a null cache.
-  if (!cache || cache.unifiedTabsByWorktree !== unifiedTabsByWorktree) {
+  // `!current` first: an undefined slice makes the identity compare equal against a null cache.
+  // Held in a local so the rebuilt value stays narrowed; a module-level `let` does not.
+  let current = cache
+  if (!current || current.unifiedTabsByWorktree !== unifiedTabsByWorktree) {
     const byWorktree = new Map<string, Map<string, Tab>>()
     for (const [id, tabs] of Object.entries(unifiedTabsByWorktree ?? {})) {
       const index = new Map<string, Tab>()
@@ -35,7 +37,8 @@ export function selectAgentSessionTabsByTabIdForWorktree(
       }
       byWorktree.set(id, index)
     }
-    cache = { unifiedTabsByWorktree, byWorktree }
+    current = { unifiedTabsByWorktree, byWorktree }
+    cache = current
   }
-  return cache.byWorktree.get(worktreeId) ?? EMPTY_AGENT_SESSION_TABS
+  return current.byWorktree.get(worktreeId) ?? EMPTY_AGENT_SESSION_TABS
 }
