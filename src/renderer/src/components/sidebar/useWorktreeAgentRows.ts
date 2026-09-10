@@ -12,6 +12,10 @@ import {
 } from './worktree-card-status-inputs'
 import { buildWorktreeAgentRows } from './worktree-agent-rows'
 import {
+  EMPTY_AGENT_SESSION_TABS,
+  selectAgentSessionTabsByTabIdForWorktree
+} from './worktree-agent-session-tab-index'
+import {
   EMPTY_LIVE_ENTRIES,
   EMPTY_MIGRATION_UNSUPPORTED_ENTRIES,
   EMPTY_RETAINED,
@@ -101,6 +105,11 @@ export function useWorktreeAgentRows(worktreeId: string, active = true): Dashboa
         : EMPTY_WORKTREE_AGENT_ORCHESTRATION
     )
   )
+  // Why: the selector caches on the unified-tabs identity, so this returns a stable map and the
+  // card re-renders only when a tab actually changes.
+  const agentSessionTabsByTabId = useAppStore((s) =>
+    active ? selectAgentSessionTabsByTabIdForWorktree(s, worktreeId) : EMPTY_AGENT_SESSION_TABS
+  )
   const agentFreshnessSignature = useAppStore((s) =>
     active ? selectAgentFreshness(s) : EMPTY_WORKTREE_AGENT_FRESHNESS_SIGNATURE
   )
@@ -131,6 +140,7 @@ export function useWorktreeAgentRows(worktreeId: string, active = true): Dashboa
         ptyIdsByTabId,
         terminalLayoutsByTabId,
         runtimeAgentOrchestrationByPaneKey,
+        agentSessionTabsByTabId,
         now
       })
     )
@@ -138,6 +148,7 @@ export function useWorktreeAgentRows(worktreeId: string, active = true): Dashboa
   }, [
     active,
     tabs,
+    agentSessionTabsByTabId,
     liveEntries,
     migrationUnsupported,
     retained,

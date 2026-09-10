@@ -210,7 +210,7 @@ export class StructuredAgentSessionHost {
   supportsCreate = (location: AgentSessionExecutionLocation, agent: string): boolean =>
     providerSupport.adapterSupportsCreate(this.deps.adapter, location, agent)
 
-  listSessionTabs = () => listStructuredAgentSessionTabs(this.sessions)
+  listSessionTabs = () => listStructuredAgentSessionTabs(this.sessions, this.deps.store.getRecord)
 
   /** Last projected status for every structured session this host still holds, for non-subscribing
    *  readers. The retained projections of forgotten sessions are deliberately not included. */

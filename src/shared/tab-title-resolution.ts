@@ -24,7 +24,15 @@ export function resolveTerminalTabTitle(
 
 export function resolveUnifiedTabLabel(
   tab:
-    | Pick<Tab, 'customLabel' | 'quickCommandLabel' | 'aiVaultTitle' | 'generatedLabel' | 'label'>
+    | Pick<
+        Tab,
+        | 'customLabel'
+        | 'agentSessionName'
+        | 'quickCommandLabel'
+        | 'aiVaultTitle'
+        | 'generatedLabel'
+        | 'label'
+      >
     | undefined,
   generatedTitlesEnabled: boolean,
   fallback = ''
@@ -32,6 +40,8 @@ export function resolveUnifiedTabLabel(
   const liveLabel = tab?.label?.trim() ?? ''
   return (
     tab?.customLabel?.trim() ||
+    // Only the user's own rename outranks the session's name.
+    tab?.agentSessionName?.trim() ||
     tab?.quickCommandLabel?.trim() ||
     (isMeaningfulOpenCodeTerminalTitle(liveLabel) ? liveLabel : '') ||
     tab?.aiVaultTitle?.title.trim() ||

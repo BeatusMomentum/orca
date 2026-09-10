@@ -70,6 +70,9 @@ export type Tab = {
   isPinned?: boolean // pinned tabs survive "close others"
   /** Provider backing a structured agent-session tab. */
   agentSessionAgent?: AgentType
+  /** The session's own name, mirrored from the host. Never persisted: it is host-derived, and
+   *  the record it comes from is the one place it lives. */
+  agentSessionName?: string | null
   /** Structured session adopted from this terminal's Codex TUI. */
   structuredSessionId?: string
   /** Why: per-tab rendering mode for coding-agent terminals. `'chat'` shows the

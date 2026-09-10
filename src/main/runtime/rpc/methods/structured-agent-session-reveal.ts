@@ -49,7 +49,8 @@ export const STRUCTURED_AGENT_SESSION_REVEAL_METHODS: RpcAnyMethod[] = [
         workspaceId: revealed.workspaceId,
         sessionId: revealed.sessionId,
         agent: revealed.agent,
-        activate: true
+        activate: true,
+        ...(revealed.title ? { title: revealed.title } : {})
       })
       return { ok: true as const, ...revealed }
     }

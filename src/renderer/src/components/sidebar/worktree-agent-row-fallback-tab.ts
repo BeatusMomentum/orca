@@ -1,5 +1,6 @@
 import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
 import { parsePaneKey } from '../../../../shared/stable-pane-id'
+import type { Tab } from '../../../../shared/tab-types'
 import type { TerminalTab } from '../../../../shared/terminal-tab-types'
 
 export function effectiveWorktreeAgentRowStartedAt(entry: AgentStatusEntry): number {
@@ -8,7 +9,8 @@ export function effectiveWorktreeAgentRowStartedAt(entry: AgentStatusEntry): num
 
 export function tabFromWorktreeAttributedStatusEntry(
   entry: AgentStatusEntry,
-  effectiveStartedAt: number
+  effectiveStartedAt: number,
+  unified?: Tab
 ): TerminalTab | null {
   const parsed = parsePaneKey(entry.paneKey)
   if (!parsed || !entry.worktreeId) {
@@ -19,7 +21,8 @@ export function tabFromWorktreeAttributedStatusEntry(
     ptyId: null,
     worktreeId: entry.worktreeId,
     title: entry.terminalTitle ?? 'Agent',
-    customTitle: null,
+    // The user's own rename, and only that: customLabel means the user renamed this tab.
+    customTitle: unified?.customLabel ?? null,
     color: null,
     sortOrder: Number.MAX_SAFE_INTEGER,
     // Why: missing-tab rows must keep their original clock through real state

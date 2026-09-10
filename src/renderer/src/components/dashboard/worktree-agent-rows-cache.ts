@@ -9,6 +9,7 @@ import type { RetainedAgentEntry } from '@/store/slices/agent-status'
 import type { AppState } from '@/store/types'
 import { applyAgentRowLineage, type DashboardAgentRowWithLineage } from './agent-row-lineage'
 import { buildWorktreeAgentRows } from '../sidebar/worktree-agent-rows'
+import { selectAgentSessionTabsByTabIdForWorktree } from '../sidebar/worktree-agent-session-tab-index'
 import {
   selectLiveAgentStatusEntriesForWorktree,
   selectMigrationUnsupportedEntriesForWorktree,
@@ -158,6 +159,7 @@ export function selectWorktreeAgentRowsCached(args: {
       ptyIdsByTabId,
       terminalLayoutsByTabId,
       runtimeAgentOrchestrationByPaneKey: orchestration,
+      agentSessionTabsByTabId: selectAgentSessionTabsByTabIdForWorktree(state, worktreeId),
       now
     })
   )

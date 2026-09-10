@@ -206,3 +206,47 @@ describe('tab title resolution', () => {
     ).toBe('Run build')
   })
 })
+
+describe('agent session name in the unified tab label', () => {
+  const named = {
+    customLabel: null,
+    agentSessionName: 'Fix the lease probe',
+    quickCommandLabel: 'Run tests',
+    generatedLabel: 'Generated thing',
+    label: 'Claude Chat'
+  }
+
+  it('shows the session name by default, outranking every derived label', () => {
+    expect(resolveUnifiedTabLabel(named, true)).toBe('Fix the lease probe')
+  })
+
+  it("lets the user's own rename outrank the session name", () => {
+    expect(resolveUnifiedTabLabel({ ...named, customLabel: 'My tab' }, true)).toBe('My tab')
+  })
+
+  it('reveals the session name again when the rename is cleared', () => {
+    const renamed = { ...named, customLabel: 'My tab' }
+
+    expect(resolveUnifiedTabLabel({ ...renamed, customLabel: null }, true)).toBe(
+      'Fix the lease probe'
+    )
+  })
+
+  it('falls through to the existing tiers when the session has no name', () => {
+    expect(resolveUnifiedTabLabel({ ...named, agentSessionName: null }, true)).toBe('Run tests')
+  })
+
+  it('ignores a blank session name rather than blanking the tab', () => {
+    expect(resolveUnifiedTabLabel({ ...named, agentSessionName: '   ' }, true)).toBe('Run tests')
+  })
+
+  it('leaves the PTY resolver alone: a scraped terminal title has no session tier', () => {
+    // resolveTerminalTabTitle is the terminal's own resolver; the session name must not reach it.
+    expect(
+      resolveTerminalTabTitle(
+        { customTitle: null, quickCommandLabel: 'Run tests', title: 'zsh' },
+        false
+      )
+    ).toBe('Run tests')
+  })
+})

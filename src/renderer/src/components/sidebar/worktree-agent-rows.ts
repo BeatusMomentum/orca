@@ -16,6 +16,7 @@ import type {
   TerminalPaneLayoutNode,
   TerminalTab
 } from '../../../../shared/terminal-tab-types'
+import type { Tab as UnifiedTab } from '../../../../shared/tab-types'
 import { resolveRuntimePaneTitleLeafId } from '@/lib/runtime-pane-title-leaf-id'
 import { resolveDecayedAgentRowState } from '@/lib/agent-row-decay-state'
 import { tabHasLivePty } from '@/lib/tab-has-live-pty'
@@ -146,6 +147,7 @@ export function buildWorktreeAgentRows(args: {
   ptyIdsByTabId?: Record<string, string[]>
   terminalLayoutsByTabId?: Record<string, TerminalLayoutSnapshot | undefined>
   runtimeAgentOrchestrationByPaneKey?: Record<string, AgentStatusOrchestrationContext>
+  agentSessionTabsByTabId?: ReadonlyMap<string, UnifiedTab>
   now: number
 }): DashboardAgentRow[] {
   const rows: DashboardAgentRow[] = []
@@ -214,7 +216,8 @@ export function buildWorktreeAgentRows(args: {
     }
     const rowEntry = entryWithRuntimeOrchestration(entry, args.runtimeAgentOrchestrationByPaneKey)
     const startedAt = effectiveWorktreeAgentRowStartedAt(rowEntry)
-    const tab = tabFromWorktreeAttributedStatusEntry(rowEntry, startedAt)
+    const unified = args.agentSessionTabsByTabId?.get(parsePaneKey(rowEntry.paneKey)?.tabId ?? '')
+    const tab = tabFromWorktreeAttributedStatusEntry(rowEntry, startedAt, unified)
     if (!tab) {
       continue
     }
@@ -227,6 +230,7 @@ export function buildWorktreeAgentRows(args: {
       entry: rowEntry,
       tab,
       agentType: resolveRowAgentType(rowEntry, tab),
+      sessionName: unified?.agentSessionName ?? null,
       rowSource: 'live',
       // Why: this row's tab is synthesized because no tab for it exists in this renderer,
       // so there is no live-PTY evidence to hold — the decay destination is always `idle`.

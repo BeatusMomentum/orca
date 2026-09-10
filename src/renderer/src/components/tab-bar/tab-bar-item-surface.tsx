@@ -232,7 +232,8 @@ export function renderTabBarItems({
         id: item.id,
         ptyId: null,
         worktreeId,
-        title: item.data.label,
+        // Field mapping only: the precedence order lives in tab-title-resolution.
+        title: item.data.agentSessionName ?? item.data.label,
         customTitle: item.data.customLabel,
         color: item.data.color,
         sortOrder: item.data.sortOrder,

@@ -119,11 +119,19 @@ export function getAgentRowConversationName(
   // this row's own pane title, or `null` when none resolves; `undefined` (a
   // single-pane tab) keeps the tab title. Tab-owned names above are unaffected:
   // the user gave those to the whole tab and they do not flip on focus.
-  paneLiveTitle?: string | null
+  paneLiveTitle?: string | null,
+  // Why: the agent session's own name, from its record. It is a distinct parameter rather than a
+  // `tab.title` so the live-title sanitizer below never sees it — a real name like `auth/login`
+  // is cwd-shaped and would be discarded if it arrived as a scraped title.
+  sessionName?: string | null
 ): string | null {
   const customTitle = tab.customTitle?.trim()
   if (customTitle) {
     return customTitle
+  }
+  const session = sessionName?.trim()
+  if (session) {
+    return session
   }
   const quickCommandLabel = tab.quickCommandLabel?.trim()
   if (quickCommandLabel) {

@@ -114,6 +114,8 @@ export function buildMirroredAgentTabs(
         worktreeId: snapshot.worktree,
         contentType: 'agent-session',
         agentSessionAgent: tab.agent,
+        // One site covers local and remote: every agent tab is mirrored through here.
+        agentSessionName: tab.sessionName ?? null,
         // Why: `title` is wire data typed `string`; a host that violates that must
         // degrade to the placeholder, not throw inside the snapshot patch.
         label: tab.title?.trim() || defaultAgentChatLabel(tab.agent),

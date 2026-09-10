@@ -20,6 +20,7 @@ export type StructuredAgentSessionReveal = {
   workspaceId: string
   agent: 'claude' | 'codex'
   readable: boolean
+  title?: string
 }
 
 export type StructuredAgentSessionHostSession = {

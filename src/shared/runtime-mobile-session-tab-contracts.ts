@@ -95,6 +95,9 @@ export type RuntimeMobileSessionAgentTab = {
   type: 'agent-session'
   id: string
   title: string
+  /** The session's own name when it has one. `title` falls back to the placeholder, so only
+   *  this field distinguishes a real name from "Claude Chat". */
+  sessionName?: string
   sessionId: string
   replacesSessionId?: string
   agent: 'claude' | 'codex'

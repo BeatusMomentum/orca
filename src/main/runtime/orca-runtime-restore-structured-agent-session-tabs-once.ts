@@ -94,6 +94,7 @@ export class OrcaRuntimeWithRestoreStructuredAgentSessionTabsOnce extends OrcaRu
     activate: boolean
     notify?: boolean
     replacesSessionId?: string
+    title?: string
   }): Promise<void> {
     const host = getStructuredAgentSessionHost()
     if (typeof host?.setSessionTabVisibility === 'function') {
@@ -133,7 +134,8 @@ export class OrcaRuntimeWithRestoreStructuredAgentSessionTabsOnce extends OrcaRu
     const tab: RuntimeMobileSessionAgentTab = {
       type: 'agent-session',
       id,
-      title: defaultAgentChatLabel(input.agent),
+      title: input.title ?? defaultAgentChatLabel(input.agent),
+      ...(input.title ? { sessionName: input.title } : {}),
       sessionId: input.sessionId,
       ...(input.replacesSessionId ? { replacesSessionId: input.replacesSessionId } : {}),
       agent: input.agent,
@@ -178,6 +180,33 @@ export class OrcaRuntimeWithRestoreStructuredAgentSessionTabsOnce extends OrcaRu
     if (input.notify !== false) {
       this.emitMobileSessionTabsSnapshot(stored)
     }
+  }
+
+  /** Rename a tab that is already published. `publishStructuredAgentSessionTab` early-returns on
+   *  an existing tab, so a name that arrives after the tab cannot reach a client through it. */
+  async renameStructuredAgentSessionTab(
+    workspaceId: string,
+    sessionId: string,
+    name: string | null
+  ): Promise<void> {
+    const existing = this.mobileSessionTabsByWorktree.get(workspaceId)
+    const id = `agent-session:${sessionId}`
+    const target = existing?.tabs.find((tab) => tab.id === id)
+    if (!existing || !target) {
+      return
+    }
+    const title = name ?? defaultAgentChatLabel(target.agent)
+    if (target.title === title && (target.sessionName ?? null) === name) {
+      return
+    }
+    const snapshot: RuntimeMobileSessionTabsSnapshot = {
+      ...existing,
+      snapshotVersion: existing.snapshotVersion + 1,
+      tabs: existing.tabs.map((tab) =>
+        tab.id === id ? { ...tab, title, sessionName: name ?? undefined } : tab
+      )
+    }
+    this.emitMobileSessionTabsSnapshot(this.storeMobileSessionSnapshot(workspaceId, snapshot))
   }
 
   async inspectTerminalProcess(

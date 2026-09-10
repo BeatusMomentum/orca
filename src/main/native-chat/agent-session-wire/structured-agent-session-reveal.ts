@@ -45,7 +45,8 @@ export async function revealStructuredAgentSession(
     // to aim the tab publication at another workspace.
     workspaceId: record.location.workspaceId,
     agent: record.provider,
-    readable
+    readable,
+    ...(record.conversationName ? { title: record.conversationName } : {})
   }
 }
 

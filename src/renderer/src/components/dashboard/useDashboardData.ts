@@ -9,6 +9,8 @@ export type DashboardAgentRow = {
   entry: AgentStatusEntry
   tab: TerminalTab
   agentType: AgentType
+  /** The agent session's own name, from its record. Absent for rows with no unified tab. */
+  sessionName?: string | null
   rowSource?: 'live' | 'retained' | 'subagent'
   state: AgentRowState
   /** Pane to focus when the row is activated, when it differs from paneKey.
